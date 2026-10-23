@@ -1,0 +1,9 @@
+[
+  {
+    "price_basis_id": "DEMO-PRICE-001", "price_basis_version": "1",
+    "name": "演示型材材料单价（未税，仅铝型材材料）",
+    "currency": "CNY", "price_unit": "CNY/kg", "tax_basis": "exclusive", "cost_scope": "aluminum_material_only",
+    "quote_date": null, "valid_until": null, "provenance_id": "PROV-DEMO-001",
+    "notes": "演示价格，不是市场报价；无报价日期。"
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "_note": "改版方案 §9.5 手工算例的独立复算值（按 Nc=W/b+1, Lc=Nc×H, Rt=H/h+1, Lt=Rt×W, M=Lc×μc+Lt×μt, C=Mc×pc+Mt×pt 手算录入）。被测代码不读取本文件。",
+  "inputs": {"W": "18", "H": "6", "h": "1.5", "column_linear_mass": "2.7", "beam_linear_mass": "1.3",
+             "column_price": "25", "beam_price": "28"},
+  "b_1.5": {"facade_area_m2": "108.00", "nx": "12", "ny": "4", "column_length_m": "78.000", "beam_length_m": "90.000",
+            "column_mass_kg": "210.600", "beam_mass_kg": "117.000", "total_mass_kg": "327.600",
+            "column_cost_cny": "5,265.00", "beam_cost_cny": "3,276.00", "total_cost_cny": "8,541.00"},
+  "b_1.2": {"nx": "15", "column_length_m": "96.000", "beam_length_m": "90.000", "total_mass_kg": "376.200",
+            "total_cost_cny": "9,756.00"},
+  "b_2.0": {"nx": "9", "column_length_m": "60.000", "total_mass_kg": "279.000", "total_cost_cny": "7,326.00"},
+  "compare_1.2_to_1.5": {"delta_total_cost_cny": "-1,215.00", "percent_total_cost": "-12.45"},
+  "compare_1.5_to_1.2": {"delta_total_cost_cny": "1,215.00", "percent_total_cost": "14.23",
+                         "_note": "1215/8541 = 14.2255…%，按 ROUND_HALF_UP 保留 2 位为 14.23%（改版方案 T11 写作 14.22%，系文档笔误）"},
+  "price_26000_per_t": {"column_unit_price": "26", "b_1.2_total_cost_cny": "10,015.20"}
+}

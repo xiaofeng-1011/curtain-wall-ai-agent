@@ -1,0 +1,15 @@
+[
+  {
+    "rule_set_id": "DEMO-RULESET-001", "rule_set_version": "1",
+    "name": "演示必查清单（3 条演示规则，0 条正式条款）",
+    "scope": "构件式玻璃幕墙／方案阶段／演示流程验证",
+    "required_count": 3,
+    "members": [
+      {"item_id": "ITEM-01", "rule_id": "DEMO-R01", "display_order": 1, "required": true},
+      {"item_id": "ITEM-02", "rule_id": "DEMO-R02", "display_order": 2, "required": true},
+      {"item_id": "ITEM-03", "rule_id": "DEMO-R03", "display_order": 3, "required": true}
+    ],
+    "provenance_id": "PROV-DEMO-RULE-001",
+    "coverage_notes": "仅覆盖三条团队自构造演示规则，不代表正式规范核查；正式条款覆盖 0。"
+  }
+]

@@ -1,0 +1,32 @@
+[
+  {
+    "provenance_id": "PROV-DEMO-001",
+    "source_status": "synthetic",
+    "source_type": "team_constructed",
+    "review_status": "unreviewed",
+    "generation_method": "provided",
+    "source_ref": "团队自构造演示包 v1",
+    "location": "data/demo（本数据包）",
+    "notes": "团队构造的演示数值，不来自任何企业或真实工程；人工核对算术不改变其演示身份。"
+  },
+  {
+    "provenance_id": "PROV-DEMO-RULE-001",
+    "source_status": "synthetic",
+    "source_type": "team_constructed",
+    "review_status": "unreviewed",
+    "generation_method": "provided",
+    "source_ref": "团队自构造演示规则 v1",
+    "location": "data/demo/rules.json",
+    "notes": "阈值仅用于验证状态、规则调用和报告流程，没有工程安全含义；无正式标准名称、编号与条号。"
+  },
+  {
+    "provenance_id": "PROV-PENDING-001",
+    "source_status": "pending",
+    "source_type": "unknown",
+    "review_status": "unreviewed",
+    "generation_method": "provided",
+    "source_ref": "待确认",
+    "location": null,
+    "notes": "地区与规范核查日期未提供；演示规则不依赖二者，正式规则需要时应追问，不默认填写运行日期。"
+  }
+]

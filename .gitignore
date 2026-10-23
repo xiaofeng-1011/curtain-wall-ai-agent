@@ -1,0 +1,8 @@
+.streamlit/secrets.toml
+data/runtime/
+data/workspace/
+output/
+evidence/ui-v04*/
+docs/superpowers/
+__pycache__/
+.pytest_cache/

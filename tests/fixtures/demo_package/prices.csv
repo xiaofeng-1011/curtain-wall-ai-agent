@@ -1,0 +1,5 @@
+price_basis_id,profile_id,unit_price,currency,unit,tax_basis,price_basis_version,provenance_id
+DEMO-PRICE-001,COL-A,26.00,CNY,CNY/kg,exclusive,1,PROV-DEMO-001
+DEMO-PRICE-001,COL-B,28.00,CNY,CNY/kg,exclusive,1,PROV-DEMO-001
+DEMO-PRICE-001,BEAM-A,27.00,CNY,CNY/kg,exclusive,1,PROV-DEMO-001
+DEMO-PRICE-001,BEAM-B,29.00,CNY,CNY/kg,exclusive,1,PROV-DEMO-001

@@ -1,0 +1,5 @@
+profile_id,component_type,profile_name,linear_mass,unit,provenance_id,applicability_notes
+COL-A,column,演示立柱 A,2.400,kg/m,PROV-DEMO-001,演示材料记录；不对应真实厂家截面；工程适用性未确认
+COL-B,column,演示立柱 B,3.200,kg/m,PROV-DEMO-001,演示材料记录；不对应真实厂家截面；工程适用性未确认
+BEAM-A,beam,演示横梁 A,1.200,kg/m,PROV-DEMO-001,演示材料记录；不对应真实厂家截面；工程适用性未确认
+BEAM-B,beam,演示横梁 B,1.600,kg/m,PROV-DEMO-001,演示材料记录；不对应真实厂家截面；工程适用性未确认

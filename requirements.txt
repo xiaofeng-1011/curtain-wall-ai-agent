@@ -1,0 +1,6 @@
+streamlit>=1.65
+pandas>=3.0
+openai>=3.28        # DeepSeek（OpenAI 兼容接口），默认在线模型
+anthropic>=1.13     # 可选：MW_PROVIDER=anthropic 时使用 Claude
+PyMuPDF>=1.27       # PDF文字层读取、登记原件校验与引用原页渲染
+pytest>=9.0

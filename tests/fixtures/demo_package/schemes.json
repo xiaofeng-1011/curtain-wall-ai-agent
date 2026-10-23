@@ -1,0 +1,52 @@
+[
+  {
+    "seed_id": "S0", "scheme_id": "S0", "case_id": "DEMO-CW-001", "parent_seed_id": null,
+    "label": "调整前 S0：1.2 m 分格", "change_reason": "基准方案",
+    "parameters": {
+      "width_m": {"value": "12", "unit": "m", "provenance_ids": ["PROV-DEMO-001"]},
+      "height_m": {"value": "9", "unit": "m", "provenance_ids": ["PROV-DEMO-001"]},
+      "grid_width_m": {"value": "1.2", "unit": "m", "provenance_ids": ["PROV-DEMO-001"]},
+      "grid_height_m": {"value": "1.5", "unit": "m", "provenance_ids": ["PROV-DEMO-001"]},
+      "floor_height_m": {"value": "3", "unit": "m", "provenance_ids": ["PROV-DEMO-001"]},
+      "reported_area_m2": {"value": null, "unit": "m²", "provenance_ids": ["PROV-DEMO-001"]},
+      "column_profile_id": {"value": "COL-A", "unit": null, "provenance_ids": ["PROV-DEMO-001"]},
+      "beam_profile_id": {"value": "BEAM-A", "unit": null, "provenance_ids": ["PROV-DEMO-001"]},
+      "column_mass_override": {"value": null, "unit": "kg/m", "provenance_ids": ["PROV-DEMO-001"]},
+      "beam_mass_override": {"value": null, "unit": "kg/m", "provenance_ids": ["PROV-DEMO-001"]},
+      "price_basis_id": {"value": "DEMO-PRICE-001", "unit": null, "provenance_ids": ["PROV-DEMO-001"]},
+      "column_price_override": {"value": null, "unit": "CNY/kg", "provenance_ids": ["PROV-DEMO-001"]},
+      "beam_price_override": {"value": null, "unit": "CNY/kg", "provenance_ids": ["PROV-DEMO-001"]},
+      "measurement_model_id": {"value": "rect_uniform_axis_v1", "unit": null, "provenance_ids": ["PROV-DEMO-001"]},
+      "region": {"value": null, "unit": null, "provenance_ids": ["PROV-PENDING-001"]},
+      "check_date": {"value": null, "unit": null, "provenance_ids": ["PROV-PENDING-001"]}
+    }
+  },
+  {
+    "seed_id": "S1", "scheme_id": "S1", "case_id": "DEMO-CW-001", "parent_seed_id": "S0",
+    "label": "调整后 S1：1.5 m 分格", "change_reason": "分格宽度由 1.2 m 调整为 1.5 m",
+    "parameters": {"grid_width_m": {"value": "1.5", "unit": "m", "provenance_ids": ["PROV-DEMO-001"]}}
+  },
+  {
+    "seed_id": "S2", "scheme_id": "S2", "case_id": "DEMO-CW-001", "parent_seed_id": "S1",
+    "label": "换规格对照 S2：1.5 m 分格 + B 规格", "change_reason": "保留 S1 几何，型材改为 COL-B、BEAM-B（规格敏感性比较，不代表适用性）",
+    "parameters": {
+      "column_profile_id": {"value": "COL-B", "unit": null, "provenance_ids": ["PROV-DEMO-001"]},
+      "beam_profile_id": {"value": "BEAM-B", "unit": null, "provenance_ids": ["PROV-DEMO-001"]}
+    }
+  },
+  {
+    "seed_id": "S3", "scheme_id": "S3", "case_id": "DEMO-CW-001", "parent_seed_id": "S0",
+    "label": "测试 S3：分格高 3.0 m", "change_reason": "T17 分格高度变化",
+    "parameters": {"grid_height_m": {"value": "3.0", "unit": "m", "provenance_ids": ["PROV-DEMO-001"]}}
+  },
+  {
+    "seed_id": "S4", "scheme_id": "S4", "case_id": "DEMO-CW-001", "parent_seed_id": "S0",
+    "label": "测试 S4：分格宽 2.0 m", "change_reason": "T18 分格宽度边界外",
+    "parameters": {"grid_width_m": {"value": "2.0", "unit": "m", "provenance_ids": ["PROV-DEMO-001"]}}
+  },
+  {
+    "seed_id": "S5", "scheme_id": "S5", "case_id": "DEMO-CW-001", "parent_seed_id": "S0",
+    "label": "测试 S5：层高 4.5 m", "change_reason": "T19 层高演示条件不满足",
+    "parameters": {"floor_height_m": {"value": "4.5", "unit": "m", "provenance_ids": ["PROV-DEMO-001"]}}
+  }
+]

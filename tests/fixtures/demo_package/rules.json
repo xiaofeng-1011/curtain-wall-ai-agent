@@ -1,0 +1,59 @@
+{
+  "demo_rules": [
+    {
+      "rule_id": "DEMO-R01", "rule_version": "1", "evidence_type": "demo_rule",
+      "title": "DEMO-R01 分格宽度演示条件",
+      "exact_text": "【团队自构造演示规则】分格宽度 b 不大于 1.50 m 时记为演示条件满足；否则触发演示关注项，需工程师确认实际工程要求。本阈值没有工程安全含义。",
+      "source_ref": "团队自构造演示规则 v1", "location": "data/demo/rules.json#DEMO-R01",
+      "standard_name": null, "standard_number": null, "edition": null, "clause_number": null,
+      "publication_date": null, "effective_from": null, "effective_to": null,
+      "effect_status": "not_applicable", "status_checked_at": null, "replaced_by": [],
+      "applicability": {"curtain_wall_type": ["component_glass"], "design_stage": ["scheme_design"], "region": null, "check_date_required": false, "notes": "仅演示流程"},
+      "required_parameters": ["grid_width_m"],
+      "machine_checkable": true,
+      "predicate": {"lhs": "grid_width_m", "operator": "<=", "threshold": {"value": "1.50", "unit": "m"}},
+      "required_tools": [],
+      "attention_text": "演示关注项触发，需工程师确认实际工程要求。",
+      "provenance_id": "PROV-DEMO-RULE-001",
+      "effect_review": {"review_status": "unreviewed", "reviewer": null, "reviewed_at": null, "scope": null},
+      "mapping_review": {"review_status": "unreviewed", "reviewer": null, "reviewed_at": null, "scope": null}
+    },
+    {
+      "rule_id": "DEMO-R02", "rule_version": "1", "evidence_type": "demo_rule",
+      "title": "DEMO-R02 板块面积演示条件",
+      "exact_text": "【团队自构造演示规则】板块面积 a=b×h 不大于 2.00 m² 时记为演示条件满足；否则触发演示关注项。面积由计算工具提供。本规则不能判断玻璃厚度或安全性。",
+      "source_ref": "团队自构造演示规则 v1", "location": "data/demo/rules.json#DEMO-R02",
+      "standard_name": null, "standard_number": null, "edition": null, "clause_number": null,
+      "publication_date": null, "effective_from": null, "effective_to": null,
+      "effect_status": "not_applicable", "status_checked_at": null, "replaced_by": [],
+      "applicability": {"curtain_wall_type": ["component_glass"], "design_stage": ["scheme_design"], "region": null, "check_date_required": false, "notes": "仅演示流程"},
+      "required_parameters": ["grid_width_m", "grid_height_m"],
+      "machine_checkable": true,
+      "predicate": {"lhs": "panel_area_m2", "operator": "<=", "threshold": {"value": "2.00", "unit": "m²"}},
+      "required_tools": ["TL07"],
+      "attention_text": "演示关注项触发；不能据此判断玻璃厚度或安全性。",
+      "provenance_id": "PROV-DEMO-RULE-001",
+      "effect_review": {"review_status": "unreviewed", "reviewer": null, "reviewed_at": null, "scope": null},
+      "mapping_review": {"review_status": "unreviewed", "reviewer": null, "reviewed_at": null, "scope": null}
+    },
+    {
+      "rule_id": "DEMO-R03", "rule_version": "1", "evidence_type": "demo_rule",
+      "title": "DEMO-R03 层高演示条件",
+      "exact_text": "【团队自构造演示规则】层高不大于 3.60 m 时记为演示条件满足；否则触发演示关注项，需专业核实。层高不作结构跨度认定。",
+      "source_ref": "团队自构造演示规则 v1", "location": "data/demo/rules.json#DEMO-R03",
+      "standard_name": null, "standard_number": null, "edition": null, "clause_number": null,
+      "publication_date": null, "effective_from": null, "effective_to": null,
+      "effect_status": "not_applicable", "status_checked_at": null, "replaced_by": [],
+      "applicability": {"curtain_wall_type": ["component_glass"], "design_stage": ["scheme_design"], "region": null, "check_date_required": false, "notes": "仅演示流程"},
+      "required_parameters": ["floor_height_m"],
+      "machine_checkable": true,
+      "predicate": {"lhs": "floor_height_m", "operator": "<=", "threshold": {"value": "3.60", "unit": "m"}},
+      "required_tools": [],
+      "attention_text": "演示关注项触发，需专业核实。",
+      "provenance_id": "PROV-DEMO-RULE-001",
+      "effect_review": {"review_status": "unreviewed", "reviewer": null, "reviewed_at": null, "scope": null},
+      "mapping_review": {"review_status": "unreviewed", "reviewer": null, "reviewed_at": null, "scope": null}
+    }
+  ],
+  "formal_clauses": []
+}

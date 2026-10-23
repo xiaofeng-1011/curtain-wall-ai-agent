@@ -1,0 +1,41 @@
+{
+  "_note": "独立验收参考值：按产品方案 9.5 节与测试文档 1.1 节手工十进制复算后录入，synthetic。运行时代码禁止读取本文件。",
+  "formula_version": "rect_uniform_axis_v1 / GEO-*-v1 QTY-*-v1 MASS-v1 COST-v1 DELTA-v1",
+  "source_status": "synthetic",
+  "schemes": {
+    "S0": {"nx": "10", "ny": "6", "column_count": "11", "beam_rows": "7", "beam_segments": "70",
+           "panel_area_m2": "1.80", "facade_area_m2": "108",
+           "column_length_m": "99.000", "beam_length_m": "84.000",
+           "column_mass_kg": "237.600", "beam_mass_kg": "100.800", "total_mass_kg": "338.400",
+           "column_mass_per_m2": "2.2000", "beam_mass_per_m2": "0.9333", "total_mass_per_m2": "3.1333",
+           "column_cost_cny": "6177.60", "beam_cost_cny": "2721.60", "total_cost_cny": "8899.20", "cost_per_m2": "82.40",
+           "rules": {"DEMO-R01": "DEMO_MET", "DEMO-R02": "DEMO_MET", "DEMO-R03": "DEMO_MET"}},
+    "S1": {"nx": "8", "ny": "6", "column_count": "9", "beam_rows": "7", "beam_segments": "56",
+           "panel_area_m2": "2.25", "facade_area_m2": "108",
+           "column_length_m": "81.000", "beam_length_m": "84.000",
+           "column_mass_kg": "194.400", "beam_mass_kg": "100.800", "total_mass_kg": "295.200",
+           "column_mass_per_m2": "1.8000", "beam_mass_per_m2": "0.9333", "total_mass_per_m2": "2.7333",
+           "column_cost_cny": "5054.40", "beam_cost_cny": "2721.60", "total_cost_cny": "7776.00", "cost_per_m2": "72.00",
+           "rules": {"DEMO-R01": "DEMO_MET", "DEMO-R02": "DEMO_ATTENTION", "DEMO-R03": "DEMO_MET"}},
+    "S2": {"nx": "8", "ny": "6", "column_length_m": "81.000", "beam_length_m": "84.000",
+           "column_mass_kg": "259.200", "beam_mass_kg": "134.400", "total_mass_kg": "393.600",
+           "column_cost_cny": "7257.60", "beam_cost_cny": "3897.60", "total_cost_cny": "11155.20",
+           "rules": {"DEMO-R01": "DEMO_MET", "DEMO-R02": "DEMO_ATTENTION", "DEMO-R03": "DEMO_MET"}},
+    "S3": {"nx": "10", "ny": "3", "column_length_m": "99.000", "beam_length_m": "48.000",
+           "total_mass_kg": "295.200", "total_cost_cny": "7732.80",
+           "rules": {"DEMO-R01": "DEMO_MET", "DEMO-R02": "DEMO_ATTENTION", "DEMO-R03": "DEMO_MET"}},
+    "S4": {"nx": "6", "ny": "6", "column_length_m": "63.000", "beam_length_m": "84.000",
+           "total_mass_kg": "252.000", "total_cost_cny": "6652.80",
+           "rules": {"DEMO-R01": "DEMO_ATTENTION", "DEMO-R02": "DEMO_ATTENTION", "DEMO-R03": "DEMO_MET"}},
+    "S5": {"nx": "10", "ny": "6", "column_length_m": "99.000", "beam_length_m": "84.000",
+           "total_mass_kg": "338.400", "total_cost_cny": "8899.20",
+           "rules": {"DEMO-R01": "DEMO_MET", "DEMO-R02": "DEMO_MET", "DEMO-R03": "DEMO_ATTENTION"}}
+  },
+  "comparisons": {
+    "S1_vs_S0": {"delta_total_cost_cny": "-1123.20", "delta_column_cost_cny": "-1123.20", "delta_beam_cost_cny": "0.00",
+                 "delta_total_mass_kg": "-43.200", "delta_column_length_m": "-18.000", "delta_beam_length_m": "0.000",
+                 "delta_cost_per_m2": "-10.40", "delta_total_mass_per_m2": "-0.4000", "percent_total_cost": "-12.62"},
+    "S2_vs_S0": {"delta_total_cost_cny": "2256.00", "percent_total_cost": "25.35"}
+  },
+  "price_replacement_T37": {"S1_total_cost_cny_with_COL-A_30_BEAM-A_31": "8956.80"}
+}

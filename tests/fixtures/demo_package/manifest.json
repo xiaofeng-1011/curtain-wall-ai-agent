@@ -1,0 +1,19 @@
+{
+  "schema_version": "0.2",
+  "dataset_id": "DEMO-CW-DATA",
+  "dataset_version": "1",
+  "name": "幕墙方案比选演示数据包（团队自构造）",
+  "default_case_id": "DEMO-CW-001",
+  "is_demo": true,
+  "files": [
+    {"path": "provenance.json", "type": "provenance"},
+    {"path": "cases.json", "type": "cases"},
+    {"path": "schemes.json", "type": "schemes"},
+    {"path": "profiles.csv", "type": "profiles"},
+    {"path": "price_bases.json", "type": "price_bases"},
+    {"path": "prices.csv", "type": "prices"},
+    {"path": "rule_sets.json", "type": "rule_sets"},
+    {"path": "rules.json", "type": "rules"},
+    {"path": "expected_results.json", "type": "acceptance"}
+  ]
+}

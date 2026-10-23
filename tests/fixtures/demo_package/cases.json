@@ -1,0 +1,11 @@
+[
+  {
+    "case_id": "DEMO-CW-001",
+    "case_name": {"value": "矩形构件式玻璃幕墙分格调整演示", "unit": null, "provenance_ids": ["PROV-DEMO-001"]},
+    "curtain_wall_type": {"value": "component_glass", "unit": null, "provenance_ids": ["PROV-DEMO-001"]},
+    "design_stage": {"value": "scheme_design", "unit": null, "provenance_ids": ["PROV-DEMO-001"]},
+    "required_rule_set_id": "DEMO-RULESET-001",
+    "baseline_seed_id": "S0",
+    "description": "单个矩形立面、等距分格、无洞口；只计立柱与横梁理论轴线用量及材料金额。"
+  }
+]
