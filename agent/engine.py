@@ -51,7 +51,7 @@ def freeze_snapshots(ws, project: dict, roles: list[str], change_reason: str = "
 
 
 def run_task(ws, project: dict, *, conversation_id: str, request_id: str, task: str, model_mode: str,
-             change_reason: str = "") -> dict:
+             change_reason: str = "", analysis_context: dict | None = None) -> dict:
     existing = ws.find_run_by_request(request_id)
     if existing:
         return existing
@@ -179,14 +179,29 @@ def run_task(ws, project: dict, *, conversation_id: str, request_id: str, task: 
     run["completeness_text"] = completeness_text(run)
     run["review_items"] = review_items(run)
     run["ended_at"] = now_utc()
+    analysis = None
+    comp = run.get("comparison") or {}
+    if comp.get("comparable") and run["execution_state"] != "FAILED":
+        # 成功比较后自动生成方案分析；模型不可用或失败时使用本地模板并如实标注。
+        try:
+            analysis = generate_analysis(ws, run, analysis_context or {}, use_model=model_mode == "online")
+            run["analysis_id"] = analysis["analysis_id"]
+        except Exception as exc:  # noqa: BLE001 - 分析失败不影响计算结果
+            issues.setdefault("report", []).append(Issue(Code.TOOL_FAILED, f"方案分析生成失败：{exc}", blocking=False).to_dict())
     try:
-        run["report"] = build_report(run, "fallback")  # 结果卡用模板；模型解释只在用户追问“为什么”时生成
+        run["report"] = build_report(run, model_mode, analysis)
         statuses["report"] = "done"
     except Exception as exc:  # noqa: BLE001
         run["report"] = None
         statuses["report"] = "error"
         issues.setdefault("report", []).append(Issue(Code.TOOL_FAILED, f"报告生成失败：{exc}").to_dict())
     saved = ws.save_run(run)
+    if analysis and saved.get("analysis_id") == analysis["analysis_id"]:
+        ws.save_analysis(analysis)
+        ws.log("model_call", {"purpose": "scheme_analysis", "source": analysis["source"],
+                              **{k: v for k, v in (analysis.get("model_record") or {}).items()
+                                 if k in ("attempted", "ok", "model", "provider", "endpoint", "duration_ms", "reason")}},
+               project_id=project["project_id"], conversation_id=conversation_id, run_id=run["run_id"])
     ws.log("run_settled", {"state": run["execution_state"], "modules": statuses}, project_id=project["project_id"],
            conversation_id=conversation_id, run_id=run["run_id"])
     return saved
@@ -210,7 +225,44 @@ def run_query(ws, *, query_text: str, conversation_id: str, request_id: str, pro
     return ws.save_run(run)
 
 
-def run_standard_query(ws, *, query_text: str, conversation_id: str, request_id: str, options: dict) -> dict:
+def generate_analysis(ws, run: dict, context: dict, *, use_model: bool, version: int = 1) -> dict:
+    """变更核查 + 方案分析。证据取自用户当前选择的规范资料（默认内置库）。"""
+    from evidence.change_check import check_changes
+    from evidence.standard_retrieval import StandardRetriever
+    from reporting.analysis import generate
+    library = ws.standard_library()
+    collections = [c for c in ws.default_standard_selection() if library.get_collection(c)]
+    retriever = StandardRetriever(library) if collections else None
+    try:
+        check = check_changes(run, retriever=retriever, collection_ids=collections, library=library)
+    finally:
+        if retriever is not None:
+            retriever.close()
+    return generate(run, check, goals=context.get("goals") or [], recent=context.get("recent") or [],
+                    use_model=use_model, version=version, conversation_id=run.get("conversation_id"))
+
+
+def regenerate_analysis(ws, run_id: str, context: dict, *, use_model: bool) -> dict:
+    """为同一运行生成新版本分析；旧版本保留原始依据。"""
+    run = ws.get_run(run_id)
+    if not run or not (run.get("comparison") or {}).get("comparable"):
+        raise ValueError("该计算没有可比较的两个方案")
+    analysis = generate_analysis(ws, run, context, use_model=use_model, version=ws.next_analysis_version(run_id))
+    return ws.save_analysis(analysis)
+
+
+def project_conditions(ws, project_id: str | None) -> dict | None:
+    """规范解读可参考的项目条件：只取用户已录入的参数，不补任何默认值。"""
+    from .projects import summary_rows
+    project = ws.get_project(project_id) if project_id else None
+    if not project:
+        return None
+    return {"项目": project["name"], "方案": {ROLE_NAME[r]: dict(summary_rows(project, r)) for r in project["schemes"]},
+            "说明": "以下为用户录入的参数；未列出的条件均未知"}
+
+
+def run_standard_query(ws, *, query_text: str, conversation_id: str, request_id: str, options: dict,
+                       project_context: dict | None = None) -> dict:
     """An isolated read-only standards workflow, with no project/package parameters."""
     from agent.standard_qa import answer
     from evidence.standard_retrieval import StandardRetriever
@@ -220,20 +272,26 @@ def run_standard_query(ws, *, query_text: str, conversation_id: str, request_id:
     library = ws.standard_library()
     retriever = StandardRetriever(library)
     started = now_utc()
+    mode = options.get("answer_mode", "source")
+    if project_context is None and options.get("project_id"):
+        project_context = project_conditions(ws, options.get("project_id"))
     try:
         retrieval = retriever.search(query_text, options.get("collection_ids", []),
                                      standards=options.get("standards"), versions=options.get("versions"),
-                                     categories=options.get("categories"))
-        response = answer(library, retrieval, mode=options.get("answer_mode", "source"),
-                          allow_model=bool(options.get("allow_model")))
+                                     categories=options.get("categories"), top_k=8 if mode == "answer" else 6)
+        response = answer(library, retrieval, mode=mode, allow_model=bool(options.get("allow_model")),
+                          retriever=retriever, project_context=project_context)
     finally:
         retriever.close()
     run = {"run_id": new_id("RUN"), "request_id": request_id, "project_id": None,
            "conversation_id": conversation_id, "requested_task": "standard_qa", "requested_task_label": "规范问答",
            "input_hash": sha256_of({"query": query_text, "options": options, "retrieval": retrieval}),
            "started_at": started, "ended_at": now_utc(), "options": options,
-           "retrieval": retrieval, "answer": response,
+           "retrieval": retrieval, "answer": response, "linked_project_id": options.get("project_id"),
            "execution_state": "COMPLETE" if response["evidence"] else "PARTIAL"}
+    ws.log("model_call", {"purpose": "standard_interpret", **{k: v for k, v in (response.get("model_record") or {}).items()
+                                                              if k in ("attempted", "ok", "model", "provider", "endpoint", "duration_ms", "reason", "evidence_count")}},
+           conversation_id=conversation_id, run_id=run["run_id"])
     return ws.save_run(run)
 
 

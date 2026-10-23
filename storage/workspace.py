@@ -16,7 +16,8 @@ from pathlib import Path
 from domain.contracts import Code, canonical_json, now_utc
 from storage.titles import backfill_title
 
-DEFAULT_DIR = Path(os.environ.get("MW_RUNTIME_DIR") or Path(__file__).resolve().parents[1] / "data" / "workspace")
+DEFAULT_DIR = Path(os.environ.get("MW_RUNTIME_DIR") or
+                   Path(os.environ.get("LOCALAPPDATA") or Path.home()/'.local'/'share') / 'MqHelper' / 'workspace')
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -41,6 +42,9 @@ CREATE TABLE IF NOT EXISTS library_materials (
 CREATE TABLE IF NOT EXISTS exports (
   export_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, project_id TEXT, request_id TEXT UNIQUE NOT NULL,
   json TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS analyses (
+  analysis_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, project_id TEXT, conversation_id TEXT, version INTEGER NOT NULL,
+  json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(run_id, version));
 CREATE TABLE IF NOT EXISTS events (
   event_id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT, conversation_id TEXT, run_id TEXT,
   event_type TEXT NOT NULL, json TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -234,7 +238,7 @@ class Workspace:
         with self.tx():
             export_dirs = [json.loads(r[0]).get("dir") for r in
                            self._all("SELECT json FROM exports WHERE project_id=?", project_id)]
-            for table in ("runs", "snapshots", "exports", "events", "conversations"):
+            for table in ("runs", "snapshots", "exports", "events", "conversations", "analyses"):
                 self.db.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
             self.db.execute("DELETE FROM projects WHERE project_id=?", (project_id,))
             n = self.get_setting("purge_count", 0) + 1
@@ -267,7 +271,7 @@ class Workspace:
         problems = []
         with self.tx():
             for table in ("projects", "conversations", "snapshots", "runs", "documents", "library_materials",
-                          "exports", "events"):
+                          "exports", "events", "analyses"):
                 self.db.execute(f"DELETE FROM {table}")
         for sub in ("exports", "attachments"):
             d = self.root / sub
@@ -276,10 +280,8 @@ class Workspace:
             except OSError as e:
                 problems.append(f"{sub}: {e}")
             d.mkdir(exist_ok=True)
-        if (self.root / "standards" / "library.db").exists():
-            cleared_standards = self.standard_library().clear()
-            problems.extend(cleared_standards.get("problems", []))
-            before["standard_documents"] = cleared_standards.get("documents", 0)
+        # Standards are independent reference resources, not project/chat data.
+        # Their removal is an explicit operation in the standards manager.
         return {"cleared": before, "problems": problems}
 
     # ------------------------------------------------------------ 快照与运行（不可变）
@@ -329,6 +331,25 @@ class Workspace:
         return [json.loads(r[0]) for r in self._all(
             "SELECT json FROM runs WHERE project_id=? ORDER BY created_at DESC, rowid DESC", project_id)]
 
+    # ------------------------------------------------------------ 方案分析（每版不可变；重新生成形成新版本）
+    def save_analysis(self, analysis: dict) -> dict:
+        with self.tx():
+            self.db.execute("INSERT INTO analyses VALUES (?,?,?,?,?,?,?)",
+                            (analysis["analysis_id"], analysis["run_id"], analysis.get("project_id"),
+                             analysis.get("conversation_id"), analysis["version"], canonical_json(analysis),
+                             analysis["created_at"]))
+        return analysis
+
+    def get_analysis(self, analysis_id: str | None) -> dict | None:
+        r = self._one("SELECT json FROM analyses WHERE analysis_id=?", analysis_id) if analysis_id else None
+        return None if r is None else json.loads(r[0])
+
+    def list_analyses(self, run_id: str) -> list[dict]:
+        return [json.loads(r[0]) for r in self._all("SELECT json FROM analyses WHERE run_id=? ORDER BY version", run_id)]
+
+    def next_analysis_version(self, run_id: str) -> int:
+        return (self._one("SELECT MAX(version) FROM analyses WHERE run_id=?", run_id)[0] or 0) + 1
+
     # ------------------------------------------------------------ 资料
     def standard_library(self):
         """Separate reference records cannot enter project rules or parameters."""
@@ -336,6 +357,16 @@ class Workspace:
         if not hasattr(self, "_standard_library"):
             self._standard_library = StandardLibrary(self.root)
         return self._standard_library
+
+    def default_standard_selection(self):
+        collections = self.standard_library().list_collections()
+        available = {c['collection_id'] for c in collections}
+        saved = self.get_setting('standard_collection_selection')
+        if saved is not None:
+            # Temporarily missing/disabled collections must not erase intent.
+            return list(saved)
+        builtins = [c['collection_id'] for c in collections if c.get('builtin') or c['collection_id']=='builtin-curtain-standards']
+        return builtins or [c['collection_id'] for c in collections[:1]]
 
     def add_document(self, doc: dict, pages: list[dict]) -> dict:
         with self.tx():

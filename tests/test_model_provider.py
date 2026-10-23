@@ -37,8 +37,9 @@ def fake(monkeypatch):
         holder["comp"] = comp
         return holder
 
-    monkeypatch.setattr(extraction, "PROVIDER", "deepseek")
-    monkeypatch.setattr(extraction, "MODEL_ID", "deepseek-v4-pro")
+    monkeypatch.setenv("MW_PROVIDER", "deepseek")
+    monkeypatch.setenv("MW_MODEL", "deepseek-v4-pro")
+    monkeypatch.delenv("MW_BASE_URL", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.delenv("MW_FORCE_FALLBACK", raising=False)
     return install
@@ -118,7 +119,8 @@ def test_short_replies_skip_model(fake):
 
 
 def test_no_key_fallback(monkeypatch):
-    monkeypatch.setattr(extraction, "PROVIDER", "deepseek")
+    monkeypatch.setenv("MW_PROVIDER", "deepseek")
+    monkeypatch.delenv("MW_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("MW_FORCE_FALLBACK", raising=False)
     assert extraction.model_available() is False

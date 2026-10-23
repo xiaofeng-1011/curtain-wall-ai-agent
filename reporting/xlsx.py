@@ -6,7 +6,7 @@ import io
 from .report import SCOPE_STATEMENT, banner, comparison_table, param_rows
 
 
-def build_xlsx(run: dict, project_name: str | None = None, *, current: bool = True) -> bytes:
+def build_xlsx(run: dict, project_name: str | None = None, *, current: bool = True, analyses: list | None = None) -> bytes:
     import openpyxl
     from openpyxl.styles import Alignment, Font, PatternFill
 
@@ -100,6 +100,36 @@ def build_xlsx(run: dict, project_name: str | None = None, *, current: bool = Tr
     for st in (comp.get("steps") or []):
         ws3.append(["差值", st["formula_id"], st["expression"], st["exact_value"], st["unit"]])
     ws3.column_dimensions["C"].width = 48
+    for analysis in analyses or []:
+        # 与界面同一份已保存分析；每个版本一张表，内容不随当前参数改变。
+        ws4 = wb.create_sheet(f"方案分析v{analysis['version']}"[:31])
+        b = analysis["blocks"]
+        ws4.append([f"方案分析 第 {analysis['version']} 版", b["origin"]])
+        ws4.cell(1, 1).font = bold
+        ws4.append(["对应运行", analysis["run_id"]])
+        ws4.append(["快照", "；".join(f"{k} {v['snapshot_id']}" for k, v in analysis["binding"]["snapshots"].items())])
+        ws4.append(["限制", b["limits"]])
+        ws4.append([])
+        for line in b["main"].split("\n"):
+            if line.strip():
+                ws4.append([line.replace("**", "")])
+        ws4.append([])
+        ws4.append(["核查项", "原方案", "修改方案", "所需参数"])
+        for c in range(1, 5):
+            ws4.cell(ws4.max_row, c).font = bold
+        for it in (analysis.get("check") or {}).get("items", []):
+            r = it["results"]
+            ws4.append([it["title"], f"{r['baseline']['status_text']}：{r['baseline']['detail']}",
+                        f"{r['candidate']['status_text']}：{r['candidate']['detail']}" if "candidate" in r else "—",
+                        "；".join(it.get("params") or [])])
+        for x in analysis.get("removed", []):
+            ws4.append(["已移除", x["text"], "；".join(x["problems"])])
+        ws4.column_dimensions["A"].width = 60
+        for col in "BCD":
+            ws4.column_dimensions[col].width = 40
+        for row in ws4.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

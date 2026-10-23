@@ -34,7 +34,9 @@ REASON = {"PRICE_MISSING": "缺单价", "MASS_MISSING": "缺线重", "PROFILE_MI
           "NON_DIVISIBLE_GRID": "分格不能整除", "UPSTREAM_NOT_DONE": "前一步未完成", "VALUE_INVALID": "输入无效",
           "PRICE_BASIS_MISMATCH": "报价口径需确认", "ZERO_PRICE_UNCONFIRMED": "零价待确认", "UNIT_REQUIRED": "缺单位",
           "AREA_CONFLICT": "面积不一致", "COMPARISON_INCOMPATIBLE": "口径不一致"}
-FILE_TYPES = ["xlsx", "xlsm", "csv", "pdf", "txt", "md"]
+FILE_TYPES = ["pdf", "txt", "md", "docx", "xlsx", "xlsm", "pptx", "csv", "json", "html", "htm", "xml", "log",
+              "py", "js", "ts", "java", "c", "cpp", "h", "sh", "bat", "sql", "yml", "yaml", "ini", "toml", "conf",
+              "png", "jpg", "jpeg", "bmp", "gif", "webp"]
 
 
 # ====================================================================== 服务与状态
@@ -101,9 +103,6 @@ def sidebar(ws: Workspace, asst: Assistant, conv) -> None:
             st.rerun()
         if st.button("规范问答", icon=":material/menu_book:", width="stretch", key="new_standard_qa"):
             qa = asst.new_conversation(mode="standard_qa")
-            choices = ws.standard_library().list_collections()
-            if choices:
-                asst.set_qa_options(qa["conversation_id"], dict(qa["qa_options"], collection_ids=[choices[0]["collection_id"]]))
             open_conv(qa["conversation_id"])
             st.rerun()
         search = st.text_input("搜索对话", placeholder="搜索对话", icon=":material/search:",
@@ -127,7 +126,7 @@ def sidebar(ws: Workspace, asst: Assistant, conv) -> None:
                 with st.container(horizontal=True, wrap=False, vertical_alignment="center",
                                   key=("history-current-" if active else "history-row-") + c["conversation_id"], gap="xxsmall"):
                     if st.button(_plain_label(c["title"]), icon=":material/chat_bubble_outline:",
-                                 help=c["title"], key=f"cv-{c['conversation_id']}", width="stretch",
+                                 help=("当前对话 · " if active else "") + c["title"], key=f"cv-{c['conversation_id']}", width="stretch",
                                  type="tertiary"):
                         open_conv(c["conversation_id"])
                         st.rerun()
@@ -156,7 +155,7 @@ def sidebar(ws: Workspace, asst: Assistant, conv) -> None:
                         st.rerun()
         with st.container(key="sidebar-tools"):
             st.divider()
-            for label, icon, dialog in (("资料库", "library_books", "documents"), ("材料库", "inventory_2", "materials"),
+            for label, icon, dialog in (("文件库", "library_books", "documents"), ("型材库", "inventory_2", "materials"),
                                         ("设置", "settings", "settings")):
                 if st.button(label, icon=f":material/{icon}:", key=f"nav-{dialog}", width="stretch", type="tertiary"):
                     want_dialog(dialog, conv_id=(conv or {}).get("conversation_id"))
@@ -176,14 +175,15 @@ def conversation_header(ws, asst, conv):
         if run and run.get("requested_task") != "query":
             state = ("当前结果" if run.get("execution_state") == "COMPLETE" else "部分结果") if engine.is_current(project, run) else "参数已修改，结果待更新"
     with st.container(key="conversation-header"):
-        with st.container(horizontal=True, wrap=False, vertical_alignment="center", height=44, border=False):
+        with st.container(horizontal=True, wrap=True, vertical_alignment="center", border=False, key="conversation-title-row"):
             st.markdown(f'<div class="mw-title" title="{escape(title)}">{escape(title)}</div>', unsafe_allow_html=True)
+            if project:
+                st.markdown(f'<div class="mw-project-chip" title="当前项目">{escape(project["name"])}</div>', unsafe_allow_html=True, width="content")
             if project and st.button("方案参数", icon=":material/tune:", key="header-params", width=120):
                 want_dialog("params", conv_id=conv["conversation_id"])
                 st.rerun()
-        project_label = f"项目：{project['name']}" if project else "未关联项目"
         role = ("调整方案" if P.has_candidate(project) else "原方案") if project else "资料与问答"
-        st.markdown(f'<div class="mw-subtitle">{escape(project_label)}<span> · </span>{role}'
+        st.markdown(f'<div class="mw-subtitle">{role}'
                     f'<span class="mw-status">{escape(state)}</span></div>', unsafe_allow_html=True)
 
 
@@ -200,7 +200,8 @@ def home(ws: Workspace) -> None:
         st.session_state["hint"] = "compare"
         st.rerun()
     if c3.button("查阅资料", icon=":material/menu_book:", width="stretch"):
-        st.session_state["hint"] = "query"
+        qa = Assistant(ws).new_conversation(mode='standard_qa')
+        open_conv(qa['conversation_id'])
         st.rerun()
     hint = st.session_state.get("hint")
     if hint:
@@ -209,19 +210,20 @@ def home(ws: Workspace) -> None:
         if hint == "query":
             n = sum(d.get("text_pages", 0) > 0 for d in ws.list_documents())
             st.caption(f"当前可检索 {n} 份资料。" if n else "暂无可检索资料。上传后可继续查阅原问题。")
-            if st.button("上传资料", icon=":material/upload_file:", key="home-upload"):
+            if st.button("上传文件", icon=":material/upload_file:", key="home-upload"):
                 want_dialog("documents")
                 st.rerun()
         if st.button("退出当前任务", key="exit-hint"):
             st.session_state.pop("hint", None)
             st.rerun()
-    st.markdown('<p class="mw-scope">当前支持矩形等距构件式幕墙；结果供方案辅助，不作安全验算或工程签审。</p>',
+    st.markdown('<p class="mw-scope">计算支持矩形等距构件式幕墙；规范问答可独立查阅内置资料。结果供方案辅助，不作安全验算或工程签审。</p>',
                 unsafe_allow_html=True)
     with st.expander("查看详细范围"):
         st.markdown("- 可计算：立面面积、立柱横梁理论轴线长度（含边柱和顶底横梁）、型材质量、未税材料金额、两方案差值\n"
                     "- 不包含：玻璃、五金、加工、损耗、运输、安装、税费；不是采购量或工程总价\n"
-                    "- 不支持：单元式／石材／金属板幕墙、曲面、洞口、非等距分格、CAD/BIM 识别、结构验算、施工图审查\n"
-                    "- 资料检索只在你上传的资料中进行，资料未经审核，仅供查阅")
+                    "- 计算不支持：单元式／石材／金属板幕墙、曲面、洞口、非等距分格、CAD/BIM 识别、结构验算、施工图审查\n"
+                    "- 规范问答：检索内置规范及自行导入的规范资料，不受上述计算类型限制；资料未专业复核，引用可查看原PDF\n"
+                    "- 文件库：单独管理个人上传文件，不等同于规范库")
     mp = migration.pending(ws)
     if mp:
         with st.container(border=True):
@@ -353,22 +355,27 @@ def _why(run) -> str:
 
 
 @st.cache_data(max_entries=64, show_spinner=False)
-def _xlsx_cached(run_id: str, current: bool, run_json: str) -> bytes:
-    return build_xlsx(json.loads(run_json), current=current)
+def _xlsx_cached(run_id: str, current: bool, run_json: str, analyses_json: str = "[]") -> bytes:
+    return build_xlsx(json.loads(run_json), current=current, analyses=json.loads(analyses_json))
 
 
 def _xlsx(run_id: str, current: bool) -> bytes:
     ws, _ = services()
     run = ws.get_run(run_id)
-    return _xlsx_cached(run_id, current, json.dumps(run, ensure_ascii=False))
+    return _xlsx_cached(run_id, current, json.dumps(run, ensure_ascii=False),
+                        json.dumps(ws.list_analyses(run_id), ensure_ascii=False))
 
 
 @st.cache_data(max_entries=32, show_spinner=False)
-def _zip_cached(run_id: str, run_json: str, current: bool = True) -> bytes:
+def _zip_cached(run_id: str, run_json: str, current: bool = True, analyses_json: str = "[]") -> bytes:
     import io
     import zipfile
+    from reporting.analysis import markdown as analysis_markdown
     run = json.loads(run_json)
     files = build_artifacts(run)
+    for analysis in json.loads(analyses_json):
+        files[f"analysis_v{analysis['version']}.md"] = analysis_markdown(analysis).encode("utf-8")
+        files[f"analysis_v{analysis['version']}.json"] = json.dumps(analysis, ensure_ascii=False, indent=1).encode("utf-8")
     version_note = "当前结果" if current else "历史结果：参数已修改，此包为冻结的历史版本。"
     files["report.md"] = (version_note + "\n\n").encode("utf-8") + files["report.md"]
     files["版本说明.txt"] = (version_note + "\n运行：" + run_id + "\n" + SCOPE_STATEMENT).encode("utf-8")
@@ -385,7 +392,8 @@ def _zip_cached(run_id: str, run_json: str, current: bool = True) -> bytes:
 
 def _zip(run_id: str, current: bool = True) -> bytes:
     ws, _ = services()
-    return _zip_cached(run_id, json.dumps(ws.get_run(run_id), ensure_ascii=False), current)
+    return _zip_cached(run_id, json.dumps(ws.get_run(run_id), ensure_ascii=False), current,
+                       json.dumps(ws.list_analyses(run_id), ensure_ascii=False))
 
 
 def _log_export(run_id: str, kind: str) -> None:
@@ -459,14 +467,83 @@ def import_card(ws, asst, conv, msg) -> None:
         st.rerun()
 
 
+def analysis_card(ws, project, msg, card, blocks) -> None:
+    """方案分析：正文在主答气泡；限制常显；核查明细、出处与校验说明折叠。按保存时的版本显示，不按当前参数重写。"""
+    from evidence.change_check import STATUS_TEXT as CHECK_TEXT
+    from ui.standards import _evidence_block, model_record_text
+    st.caption(blocks.get("limits", ""))
+    analysis = ws.get_analysis(card.get("analysis_id"))
+    run = ws.get_run(card.get("run_id"), (project or {}).get("project_id"))
+    if analysis is None:
+        st.warning("原分析记录已不可用；保留消息正文。")
+        return
+    if not run:
+        st.warning("原计算记录已不可用；分析正文保留，无法查看计算依据。")
+    elif not engine.is_current(project, run):
+        st.markdown(f'<div class="mw-stale">历史分析 · 对应运行 …{escape(run["run_id"][-6:])}（第 {analysis["version"]} 版）；'
+                    f'之后参数已修改，以下内容仍针对当时的方案快照，未按当前参数重写。</div>', unsafe_allow_html=True)
+    check = analysis.get("check") or {}
+    with st.expander("变更核查逐项结果与依据"):
+        st.caption(check.get("statement", ""))
+        rows = []
+        for it in check.get("items", []):
+            r = it["results"]
+            rows.append({"核查项": it["title"], "触发": it.get("trigger") or "—",
+                         "原方案": f"{r['baseline']['status_text']}：{r['baseline']['detail']}",
+                         "修改方案": (f"{r['candidate']['status_text']}：{r['candidate']['detail']}" if "candidate" in r else "—"),
+                         "所需参数": "；".join(it.get("params") or []) or "—"})
+        if rows:
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        st.caption("状态说明：" + "；".join(CHECK_TEXT.values()) + "。只有经过审核、效力确认的可机判规则才能给出“已核查符合/不符合”。")
+        for it in check.get("items", []):
+            for note, hit in zip(it.get("notes", []), it.get("evidence", [])):
+                st.caption(f"{it['title']} [{note['n']}] {note['standard_code']}-{note['version']} 第 {note['clause']} 条（候选）· "
+                           f"{note['pages']} · {note['level']}，{note['nature']} · {note['force']} · 现行状态：{note['current_status']}")
+                _evidence_block(analysis["analysis_id"], hit, msg["id"] + it["id"],
+                                label=f"展开原文与原PDF入口 · {hit['filename']}")
+    with st.expander("分析说明与校验"):
+        for step in blocks.get("steps", []):
+            st.markdown(step)
+        if blocks.get("supplemental"):
+            st.markdown(blocks["supplemental"])
+        for x in analysis.get("removed", []):
+            st.caption(f"已移除：“{x['text']}” —— {'；'.join(x['problems'])}")
+        for x in analysis.get("program_notes", []):
+            st.caption("程序调整：" + x)
+        b = analysis["binding"]
+        st.caption(f"绑定：运行 {b['run_id']} · " + " · ".join(f"{k} {v['snapshot_id']}（{v['content_hash'][:10]}）"
+                                                         for k, v in b["snapshots"].items())
+                   + f" · 证据索引 {((b.get('evidence_version') or {}).get('index_version')) or '未使用'}")
+        st.caption("模型状态：" + model_record_text(analysis.get("model_record")))
+        if analysis.get("goals"):
+            st.caption("已识别的用户目标：" + "、".join(analysis["goals"]))
+    if run and st.button("查看完整计算依据", key=f"ev-{msg['id']}"):
+        want_dialog("evidence", run_id=run["run_id"])
+        st.rerun()
+
+
 def render_message(ws, asst, conv, project, msg, latest_ids: set) -> None:
     role = "user" if msg["role"] == "user" else "assistant"
     with st.chat_message(role, avatar=":material/person:" if role == "user" else ":material/architecture:"):
-        if msg.get("text") and (msg.get("card") or {}).get("type") != "result":
-            st.markdown(msg["text"])
+        card = msg.get("card") or {}
+        blocks = card.get("blocks") if card.get("type") in ("explain", "analysis") else None
+        structured = isinstance(blocks, dict) and blocks.get("version") in (1, 2) and bool(blocks.get("main"))
+        if msg.get("text") and card.get("type") != "result":
+            with st.container(key="answer-bubble-" + msg["id"]):
+                # Legacy messages retain their entire original Markdown.
+                st.markdown(blocks["main"] if structured else msg["text"])
         if msg.get("note"):
             st.caption(msg["note"])
-        card = msg.get("card") or {}
+        if structured and card.get("type") == "analysis":
+            analysis_card(ws, project, msg, card, blocks)
+        elif structured:
+            st.caption(blocks.get("limits", ""))
+            with st.expander("计算步骤与补充说明"):
+                for step in blocks.get("steps", []):
+                    st.markdown(step)
+                if blocks.get("supplemental"):
+                    st.markdown("**补充说明**")
+                    st.markdown(blocks["supplemental"])
         if card.get("type") == "result":
             run = ws.get_run(card["run_id"], (project or {}).get("project_id"))
             if run:
@@ -489,7 +566,12 @@ def render_message(ws, asst, conv, project, msg, latest_ids: set) -> None:
                 st.download_button("下载比选表" if cur else "下载此历史版本", data=_xlsx(run["run_id"], cur), file_name=f"比选表_{run['run_id'][-6:]}.xlsx",
                                    key=f"dx-{msg['id']}", on_click=_log_export, args=(run["run_id"], "xlsx"))
         elif card.get("type") == "explain":
-            if st.button("查看完整计算依据", key=f"ev-{msg['id']}"):
+            run = ws.get_run(card.get("run_id"), (project or {}).get("project_id"))
+            if not run:
+                st.warning("原计算记录已不可用；保留原解释，无法查看计算依据。")
+            elif not engine.is_current(project, run):
+                st.warning("历史结果 · 参数已在这次计算后修改；以下依据仍对应原计算版本。")
+            if st.button("查看完整计算依据", key=f"ev-{msg['id']}", disabled=not run):
                 want_dialog("evidence", run_id=card["run_id"])
                 st.rerun()
         acts = [a for a in msg.get("actions") or []]
@@ -527,6 +609,23 @@ def params_dialog(conv_id: str | None):
         if st.button("放弃编辑并返回对话", key="params-close-top"):
             st.rerun()
     roles = list(project["schemes"]) if project else ["baseline"]
+    with st.expander("从文件导入参数（免手填）", expanded=not project, icon=":material/upload_file:"):
+        _imp = st.file_uploader("上传 Excel / CSV", type=["xlsx", "xlsm", "csv"], key="params-import-file",
+                                label_visibility="collapsed")
+        if _imp is not None:
+            _res = importer.previews_from_file(_imp.name, _imp.getvalue())
+            if "error" in _res:
+                st.error(_res["error"])
+            elif "sheet_choice" in _res:
+                st.warning("该文件含多个工作表，请在对话中上传并选择要导入的工作表。")
+            elif "preview" in _res:
+                _items = [i for i in _res["preview"].get("items", []) if i.get("ok") and i.get("role") == "baseline"]
+                if _items:
+                    st.session_state["params_import"] = {i["field"]: {"value": str(i.get("raw_value") or ""),
+                                                                      "unit": i.get("raw_unit")} for i in _items}
+                    st.success(f"识别到 {len(_items)} 项参数，已填入下方表单，点「保存参数」生效。")
+                else:
+                    st.info("未识别到可导入的参数。")
     tabs = st.tabs([P.ROLE_NAME[r] for r in roles])
     for ti, role in enumerate(roles):
         with tabs[ti], st.form(f"pf-{role}"):
@@ -548,14 +647,21 @@ def params_dialog(conv_id: str | None):
                     c1, c2, c3 = st.columns([2, 2, 1])
                     c1.markdown(f"{d['label']}" + ("　<span class='mw-muted'>沿用原方案</span>" if state == "inherited"
                                                    else ""), unsafe_allow_html=True)
-                    v = c2.text_input(d["label"], "" if cur is None else P._fmt(cur), key=f"in-{role}-{uf}",
+                    _imp = (st.session_state.get("params_import") or {}).get(uf)
+                    _default = _imp["value"] if _imp else ("" if cur is None else P._fmt(cur))
+                    v = c2.text_input(d["label"], _default, key=f"in-{role}-{uf}",
                                       label_visibility="collapsed")
+                    _imp_u = (_imp or {}).get("unit")
                     if d["kind"] == "text":
                         u = None
                     elif d["kind"] == "price":
-                        u = c3.selectbox("单位", ["元/kg", "元/吨"], key=f"un-{role}-{uf}", label_visibility="collapsed")
+                        _opts = ["元/kg", "元/吨"]
+                        u = c3.selectbox("单位", _opts, index=_opts.index(_imp_u) if _imp_u in _opts else 0,
+                                         key=f"un-{role}-{uf}", label_visibility="collapsed")
                     elif d["kind"] == "length":
-                        u = c3.selectbox("单位", ["m", "mm", "cm"], key=f"un-{role}-{uf}", label_visibility="collapsed")
+                        _opts = ["m", "mm", "cm"]
+                        u = c3.selectbox("单位", _opts, index=_opts.index(_imp_u) if _imp_u in _opts else 0,
+                                         key=f"un-{role}-{uf}", label_visibility="collapsed")
                     else:
                         u = c3.selectbox("单位", [d["unit"]], key=f"un-{role}-{uf}", label_visibility="collapsed")
                     if cur is not None and v.strip() == "":
@@ -726,21 +832,21 @@ def evidence_dialog(run_id: str):
 
 
 # ====================================================================== 弹窗：设置
-@st.dialog("资料库", width="large")
+@st.dialog("文件库", width="large")
 def documents_dialog(conv_id=None):
     ws, asst = services()
     docs = ws.list_documents()
-    st.caption("资料用于查阅。来源、版本与适用性待核实，不作为项目合规结论。")
+    st.caption("上传的文件用于查阅。来源、版本与适用性待核实，不作为项目合规结论。")
     if st.button("管理规范库 / 导入OCR成果包", icon=":material/library_books:"):
         want_dialog("standards")
         st.rerun()
-    up = st.file_uploader("上传 PDF / TXT / MD", type=["pdf", "txt", "md"], accept_multiple_files=True, key="docs-up")
-    if st.button("加入资料库", disabled=not up, type="primary", icon=":material/upload_file:"):
+    up = st.file_uploader("上传文件（PDF / Word / Excel / PPT / 图片 / 代码等）", type=FILE_TYPES, accept_multiple_files=True, key="docs-up")
+    if st.button("加入文件库", disabled=not up, type="primary", icon=":material/upload_file:"):
         for f in up:
             with st.spinner(f"正在读取 {f.name}…"):
                 result = documents.add_document(ws, f.name, f.getvalue())
             if result["ok"]:
-                st.success(f"{f.name} · " + ("已在资料库，未重复加入" if result["duplicate"] else "已入库"))
+                st.success(f"{f.name} · " + ("已在文件库，未重复加入" if result["duplicate"] else "已入库"))
             else:
                 st.error(f"{f.name} · 未入库：{result['error']}。请选择其他文件重试。")
         docs = ws.list_documents()
@@ -748,10 +854,10 @@ def documents_dialog(conv_id=None):
     if conv and conv.get("pending_query") and docs:
         st.caption("已保留的问题：" + conv["pending_query"])
         if st.button("用原问题检索", icon=":material/search:"):
-            asst.send(conv_id, "查阅资料：" + conv["pending_query"])
+            asst.send(conv_id, "查阅文件：" + conv["pending_query"])
             st.rerun()
     if not docs:
-        st.info("资料库为空。上传第一份资料后，即可在对话中提问。")
+        st.info("个人文件库为空。内置规范资料请从左栏“规范问答”查阅；此处用于另外上传自己的文件。")
     for d in docs:
         with st.container(border=True):
             cols = st.columns([5, 1])
@@ -764,12 +870,12 @@ def documents_dialog(conv_id=None):
                 st.write(f"将“{d['filename']}”移入回收站？")
                 if st.button("移入回收站", key=f"dd-{d['doc_id']}"):
                     ws.set_document_status(d["doc_id"], "trashed")
-                    st.toast("资料已移入回收站")
+                    st.toast("文件已移入回收站")
                     st.rerun()
     with st.expander("从本机文件夹导入"):
-        folder = st.text_input("资料文件夹路径", placeholder="填写本机资料目录")
+        folder = st.text_input("文件夹路径", placeholder="填写本机文件夹目录")
         if folder and st.button("导入文件夹"):
-            with st.spinner("正在读取资料…"):
+            with st.spinner("正在读取文件…"):
                 r = documents.add_folder(ws, folder)
             if r["ok"]:
                 st.success(f"新增 {r.get('added', 0)} 份，重复 {r.get('duplicates', 0)} 份")
@@ -779,26 +885,26 @@ def documents_dialog(conv_id=None):
                 st.caption(item)
 
 
-@st.dialog("材料库", width="large")
+@st.dialog("型材库", width="large")
 def materials_dialog(conv_id=None):
     ws, asst = services()
     conv = ws.get_conversation(conv_id) if conv_id else None
     project = asst.project_of(conv)
-    st.caption("选用材料会复制到当前项目；之后修改项目或材料库，互不联动。")
+    st.caption("选用型材会复制到当前项目；之后修改项目或型材库，互不联动。")
     lib = ws.list_library()
     if project:
         role = st.radio("复制到哪个方案", list(project["schemes"]), horizontal=True,
                         format_func=lambda r: P.ROLE_NAME[r], key="lib-role")
-        with st.expander("把当前项目材料存入材料库"):
+        with st.expander("把当前项目型材存入型材库"):
             for comp in ("column", "beam"):
                 m = P.material_of(project, role, comp)
                 if m and m.get("linear_mass") is not None:
                     if st.button(f"存入{P.COMP_NAME[comp]} · {m['profile_name']}", key=f"sl-{role}-{comp}"):
                         asst.save_to_library(project["project_id"], role, comp)
-                        st.toast("已存入材料库")
+                        st.toast("已存入型材库")
                         st.rerun()
     if not lib:
-        st.info("材料库为空。在项目中填写线重与报价后，可将材料存入这里。")
+        st.info("型材库为空。在项目中填写线重与报价后，可将型材存入这里。")
     for x in lib:
         with st.container(border=True):
             st.write(f"{P.COMP_NAME[x['component_type']]} · {x['profile_name']}")
@@ -810,11 +916,81 @@ def materials_dialog(conv_id=None):
                 asst.use_library_material(conv_id, role, x["mat_id"])
                 st.toast("已复制到当前项目")
                 st.rerun()
-            with st.popover("管理材料", key="manage-" + x["mat_id"]):
-                st.write("从个人材料库删除；已复制到项目的材料保留。")
+            with st.popover("管理型材", key="manage-" + x["mat_id"]):
+                st.write("从个人型材库删除；已复制到项目的型材保留。")
                 if st.button("确认删除", key="dl-" + x["mat_id"]):
                     ws.delete_library_material(x["mat_id"])
                     st.rerun()
+
+
+def _model_connection_ui(asst) -> None:
+    import os as _os
+    from agent import extraction
+    ms = asst.model_status()
+    st.markdown(f"当前模型：**{ms['label']}**　{'已配置' if ms['configured'] else '未配置（使用本地解析）'}")
+
+    provs = list(extraction.PROVIDERS.keys())
+    cur = extraction._provider() if extraction._provider() in provs else extraction.DEFAULT_PROVIDER
+
+    def _fmt_label(k):
+        p = extraction.PROVIDERS[k]
+        vision = "（文字+图片）" if extraction.VISION_MODELS.get(k) else ""
+        return p["label"] + vision
+
+    prov = st.selectbox("模型提供方", provs, index=provs.index(cur), format_func=_fmt_label)
+    p = extraction.PROVIDERS[prov]
+
+    if p.get("register_url"):
+        st.link_button(f"去 {p['label']} 注册拿免费 key ↗", p["register_url"])
+
+    api_key = ""
+    if p.get("key_env"):
+        cur_key = _os.environ.get(p["key_env"], "")
+        api_key = st.text_input(f"{p['label']} API Key", value=cur_key, type="password",
+                                placeholder="粘贴免费 key（sk-...）")
+
+    model_val = st.text_input("模型（留空用默认）", value="", placeholder=p["default_model"])
+
+    if st.button("保存模型设置", type="primary"):
+        try:
+            extraction.save_model_config(prov, api_key, model_val)
+            st.toast(f"已切换为 {p['label']}，立即生效")
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.error(str(exc))
+
+    st.caption("免费方案：智谱 GLM / DeepSeek / Kimi 用微信注册拿免费 key；智谱和 Kimi 一个 key 同时搞定文字和图片。"
+               "保存后立即生效。启用后用户输入、方案参数和检索到的规范片段会发送给对应服务商；接入真实工程数据前请确认保密要求。")
+    ws = asst.ws
+    calls = [e for e in ws.events(limit=200) if e.get("event_type") == "model_call"][:8]
+    with st.expander("最近的模型调用记录（用于确认是否实际调用、是否回退）"):
+        if not calls:
+            st.caption("还没有规范解读或方案分析的模型调用记录。")
+        purpose = {"standard_interpret": "规范解读", "scheme_analysis": "方案分析"}
+        for e in calls:
+            d = e.get("payload") or {}
+            state = ("成功" if d.get("ok") else "失败并回退") if d.get("attempted") else "未调用"
+            st.caption(f"{e.get('created_at', '')[:19]} · {purpose.get(d.get('purpose'), d.get('purpose'))} · {state} · "
+                       f"{d.get('model') or '—'} · {d.get('endpoint') or ''} · "
+                       + (f"{d.get('duration_ms', 0) / 1000:.1f} 秒" if d.get("duration_ms") else "")
+                       + (f" · {d.get('reason')}" if d.get("reason") and not d.get("ok") else ""))
+        st.caption("记录不含 API Key。")
+
+
+@st.dialog("启用免费 AI 理解", width="large")
+def api_guide_dialog():
+    ws, asst = services()
+    st.markdown("### 免费启用 AI，让它听懂你的话、读懂你的文件")
+    st.markdown("不配置也能用（本地解析，核心计算不受影响），但配置后可以：")
+    st.markdown("- **自然语言理解**：直接说「宽 18m 高 6m，分格 1.2m×1.5m」就能识别参数")
+    st.markdown("- **读任意文件**：Word / Excel / PDF / 图片都能读懂并回答")
+    st.markdown("- **图片理解**：上传图纸、照片，自动提取其中文字")
+    st.divider()
+    _model_connection_ui(asst)
+    st.divider()
+    if st.button("稍后再说（先用本地解析）", width="stretch"):
+        st.session_state["guide_shown"] = True
+        st.rerun()
 
 
 @st.dialog("设置", width="large")
@@ -832,15 +1008,7 @@ def settings_dialog():
             st.session_state["reading_preferences"] = dict(reduce_transparency=transparent, reduce_motion=motion, large_text=larger)
             st.rerun()
     with model:
-        ms = asst.model_status()
-        st.markdown(f"在线理解模型：**{ms['label']}**　{'已配置' if ms['configured'] else '未配置（使用本地解析）'}")
-        if ms.get("ok") is True:
-            st.markdown(f"最近一次真实请求成功（{ms.get('at')}，{ms.get('duration_ms')} ms）。")
-        elif ms.get("ok") is False:
-            st.markdown(f"最近一次请求失败（{ms.get('at')}）：{ms.get('detail')}。仍可使用表单和本地解析。")
-        else:
-            st.markdown("尚未发起过在线请求。")
-        st.caption("密钥写在 .streamlit/secrets.toml（DEEPSEEK_API_KEY）。启用后用户输入会发送给模型服务商；接入真实工程数据前请确认保密要求。")
+        _model_connection_ui(asst)
     with workspace_tab:
         with st.expander("回收站", expanded=True):
             tp = ws.list_projects("trashed")
@@ -889,11 +1057,11 @@ def settings_dialog():
         with st.expander("工作区统计与清理"):
             cnt = ws.counts()
             st.markdown(f"项目 {cnt['projects']}（回收站 {cnt['projects_trashed']}）、对话 {cnt['conversations']}、"
-                        f"计算结果 {cnt['runs']}、资料 {cnt['documents']}、材料库 {cnt['library_materials']}。")
+                        f"计算结果 {cnt['runs']}、文件 {cnt['documents']}、型材 {cnt['library_materials']}。")
             collections = ws.standard_library().list_collections()
             st.caption(f"独立规范库：{len(collections)} 个资料集，{sum(len(ws.standard_library().documents(c['collection_id'])) for c in collections)} 份登记资料。")
-            st.caption("清空同时删除规范库登记、索引与导入报告；外部原始PDF和OCR成果保持不变。")
-            st.markdown("清空工作区会删除以上全部业务数据和附件（保留应用设置与模型连接）。清空后重启仍保持空白，不会装回任何演示数据。")
+            st.caption("规范库独立保存。清空项目和聊天不会移除内置规范库或自行导入的规范资料；规范库维护请进入“规范问答 → 管理规范库”。")
+            st.markdown("清空工作区会删除项目、聊天、计算结果、普通文件库、型材和导出附件，保留规范库、应用设置与模型连接。不会装入演示项目。")
             typed = st.text_input("输入“清空”以确认")
             if st.button("清空工作区", disabled=typed.strip() != "清空", type="primary"):
                 r = ws.clear_workspace()
@@ -928,7 +1096,7 @@ def delete_dialog(kind: str, **kw):
         imp = ws.project_impact(p["project_id"])
         st.markdown(f"把项目“{p['name']}”移入回收站？将一起移入：{imp['conversations']} 个对话、{imp['schemes']} 套方案、"
                     f"{imp['materials']} 条项目材料、{imp['runs']} 次计算结果、{imp['attachments']} 个附件。"
-                    "个人材料库与资料库不受影响。可在“设置 → 工作区管理 → 回收站”恢复或彻底清理。")
+                    "个人型材库与文件库不受影响。可在“设置 → 工作区管理 → 回收站”恢复或彻底清理。")
         if st.button("移入回收站", type="primary"):
             ws.trash_project(p["project_id"])
             conv = ws.get_conversation(st.session_state.get("conv_id"))
@@ -974,7 +1142,10 @@ def main() -> None:
                        page_icon=":material/architecture:", layout="wide", initial_sidebar_state="auto")
     from ui import style
     style.inject()
+    from ui.standards import prepare_builtin
+    prepare_builtin(ws)
     sidebar(ws, asst, conv)
+    # Model configuration is optional. Offline standards use needs no key dialog.
     project = asst.project_of(conv)
     standard_mode = bool(conv and conv.get("mode") == "standard_qa")
     header = st.empty()
@@ -1032,6 +1203,8 @@ def main() -> None:
             evidence_dialog(kw["run_id"])
         elif name == "settings":
             settings_dialog()
+        elif name == "api_guide":
+            api_guide_dialog()
         elif name == "documents":
             documents_dialog(kw.get("conv_id"))
         elif name == "standards":

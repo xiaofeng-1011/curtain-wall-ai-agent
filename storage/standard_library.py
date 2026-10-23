@@ -63,12 +63,13 @@ class AssetError(ValueError):
 
 class StandardLibrary:
     def __init__(self, root):
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.directory = self.root / 'standards'
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.directory / 'library.db', check_same_thread=False, isolation_level=None)
+        self.db = sqlite3.connect((self.directory / 'library.db').resolve().as_uri(), uri=True, check_same_thread=False, isolation_level=None)
         self.db.execute('PRAGMA journal_mode=WAL')
         self._lock = threading.RLock()
+        self._asset_hash_cache = {}
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS collections(collection_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS standard_documents(collection_id TEXT NOT NULL,doc_id TEXT NOT NULL,fingerprint TEXT NOT NULL,json TEXT NOT NULL,PRIMARY KEY(collection_id,doc_id));
@@ -97,10 +98,17 @@ class StandardLibrary:
 
     def get_collection(self, collection_id):
         row = self.db.execute('SELECT revision,json FROM collections WHERE collection_id=?', (collection_id,)).fetchone()
-        return dict(json.loads(row[1]), revision=row[0]) if row else None
+        if not row:
+            return None
+        result = dict(json.loads(row[1]), revision=row[0])
+        for key in ('source_root', 'package_root'):
+            if str(result.get(key, '')).startswith('resource://builtin-standards/'):
+                from storage.bundled_standards import resolve_resource
+                result[key] = str(resolve_resource(result[key]))
+        return result
 
     def list_collections(self):
-        return [dict(json.loads(row[1]), revision=row[0]) for row in self.db.execute('SELECT revision,json FROM collections ORDER BY rowid')]
+        return [self.get_collection(row[0]) for row in self.db.execute('SELECT collection_id FROM collections ORDER BY rowid')]
 
     def revision(self, collection_id):
         collection = self.get_collection(collection_id)
@@ -108,7 +116,8 @@ class StandardLibrary:
 
     def update_collection(self, collection_id, **values):
         with self.tx():
-            collection = self.get_collection(collection_id)
+            row = self.db.execute('SELECT json FROM collections WHERE collection_id=?', (collection_id,)).fetchone()
+            collection = json.loads(row[0]) if row else None
             if collection is None:
                 raise KeyError(collection_id)
             collection.pop('revision', None)
@@ -169,7 +178,21 @@ class StandardLibrary:
         for item in collection.get('source_manifest', []):
             try:
                 path = contained_path(collection[item['root']], item['relative_path'])
-                if stat_signature(path) != item['signature']:
+                signature = stat_signature(path)
+                if 'sha256' in item:
+                    if item['sha256'] is None:
+                        changed = signature is not None
+                    elif signature is None:
+                        changed = True
+                    else:
+                        # Windows ctime is creation time; neither it nor mtime
+                        # reliably detects same-size rewrites. Verify content
+                        # for all dependencies, including OCR evidence.
+                        actual = sha256_file(path)
+                        changed = actual != item['sha256']
+                else:
+                    changed = signature != item.get('signature')
+                if changed:
                     changes.append(item['relative_path'])
             except (OSError, AssetError):
                 changes.append(item['relative_path'])

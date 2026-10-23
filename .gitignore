@@ -2,6 +2,7 @@
 data/runtime/
 data/workspace/
 output/
+resources/standards/
 evidence/ui-v04*/
 docs/superpowers/
 __pycache__/

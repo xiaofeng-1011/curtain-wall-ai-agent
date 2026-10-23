@@ -17,6 +17,7 @@ STANDARD = re.compile(r'(?i)(?:(?:DG\s*[/_—-]?\s*TJ)\s*\d+\s*[-—–－]\s*\d
 CLAUSE = re.compile(r'^\s*((?:[A-Z]\s*\.\s*)?\d{1,2}\s*\.\s*\d{1,2}(?:\s*\.\s*\d{1,3})?)(?![\d.])\s*(?=[\u4e00-\u9fffA-Za-z])')
 QUERY_CLAUSE = re.compile(r'(?<![\d.])(?:[A-Z]\s*\.\s*)?\d{1,2}\s*\.\s*\d{1,2}(?:\s*\.\s*\d{1,3})?(?![\d.])')
 TABLE_LABEL = re.compile(r'表\s*((?:[A-Z]\s*\.\s*)?\d+(?:\s*\.\s*\d+)*)(?![\d.])')
+REFERENCE = re.compile(r'(?:本规范|本标准|本规程)?第\s*((?:[A-Z]\s*\.\s*)?\d{1,2}\s*\.\s*\d{1,2}(?:\s*\.\s*\d{1,3})?)\s*条')
 COMMENTARY_HEADING = re.compile(r'^[^\S\r\n]*条\s*文\s*说\s*明[^\S\r\n]*$', re.M)
 STOP = {'什么','哪些','如何','怎么','多少','是否','要求','规定','规范','条文','查找','查询','请问','资料','依据','有关','相关','根据','基于','回答','原文','可以','中的','对于','一个','进行','需要','应当','不得','不应'}
 
@@ -209,11 +210,18 @@ class StandardRetriever:
         state = self.db.execute('SELECT revision,version FROM states WHERE collection_id=?', (collection_id,)).fetchone()
         return not c or not state or state != (str(c['revision']), INDEX_VERSION)
 
+    def _source_stale(self, collection_id):
+        # 一次问答或一次方案分析会检索多次；源文件完整性在同一检索器内只校验一次。
+        cache = self.__dict__.setdefault('_source_cache', {})
+        if collection_id not in cache:
+            cache[collection_id] = self.library.source_status(collection_id)['stale']
+        return cache[collection_id]
+
     def search(self, query, collection_ids, *, standards=None, versions=None, categories=None, top_k=6):
         collection_ids = list(dict.fromkeys(collection_ids or []))
         stale = [c for c in collection_ids if self.stale(c)]
         for c in collection_ids:
-            if hasattr(self.library, 'source_status') and self.library.source_status(c)['stale']:
+            if hasattr(self.library, 'source_status') and self._source_stale(c):
                 stale.append(c)
         result = {'evidence': [], 'stale': list(dict.fromkeys(stale)), 'index_version': INDEX_VERSION,
                   'query': query, 'collection_ids': collection_ids, 'gaps': []}
@@ -288,6 +296,76 @@ class StandardRetriever:
                 break
         if not result['evidence']:
             result['gaps'].append('未找到足够依据；不表示规范没有相关要求。明确指定的版本不会替换为其他版本。')
+        return result
+
+
+    # ------------------------------------------------------------ 解读上下文
+    def doc_chunks(self, collection_id, doc_id):
+        cache = self.__dict__.setdefault('_doc_cache', {})
+        key = (collection_id, doc_id)
+        if key not in cache:
+            cache[key] = [json.loads(r[0]) for r in self.db.execute(
+                'SELECT json FROM chunks WHERE collection_id=? AND doc_id=? ORDER BY ordinal', key)]
+        return cache[key]
+
+    def expand(self, hit, question=''):
+        """为一条命中补充适用范围、术语定义和被引用条文。
+
+        只返回同一份资料中的已登记片段，并注明与命中条文的关系；不合并为同一条要求。
+        """
+        chunks = self.doc_chunks(hit['collection_id'], hit['doc_id'])
+        out, seen = [], {hit['evidence_id']} | {c['evidence_id'] for c in hit.get('context', [])}
+
+        def add(chunk, role):
+            if chunk['evidence_id'] not in seen:
+                seen.add(chunk['evidence_id'])
+                out.append(dict(chunk, context_role=role))
+
+        body = [c for c in chunks if c['section'] == '正文候选']
+        for c in body[:60]:
+            if re.search(r'(本规范|本标准|本规程|本技术规程)\s*适\s*用\s*于', norm(c['text'])):
+                add(c, '适用范围')
+                break
+        for clause in dict.fromkeys(norm(x) for x in REFERENCE.findall(hit['text'])):
+            if clause == hit.get('clause_candidate'):
+                continue
+            target = next((c for c in body if c.get('clause_candidate') == clause), None)
+            if target:
+                add(target, f'被引用条文 {clause}')
+        q = norm(question)
+        for c in body:
+            clause = c.get('clause_candidate') or ''
+            if not clause.startswith('2.'):
+                continue
+            term = re.sub(r'^[\d.]+', '', norm(c['text']))[:8]
+            term = re.split(r'[，。,:：;；（(]', term)[0]
+            if len(term) >= 2 and (term in q or term in norm(hit['text'])):
+                add(c, f'术语定义 {clause}')
+            if len(out) >= 6:
+                break
+        return out
+
+    def mandatory_clauses(self, collection_id, doc_id):
+        """从资料公告页文字识别强制性条文编号。识别不到就是未知，不作推断。"""
+        cache = self.__dict__.setdefault('_mandatory_cache', {})
+        key = (collection_id, doc_id)
+        if key in cache:
+            return cache[key]
+        result = {'status': 'unknown', 'clauses': [], 'source_page': None, 'whole_document': False}
+        for c in self.doc_chunks(collection_id, doc_id)[:80]:
+            text = norm(c['text'])
+            if '强制性工程建设规范' in text and re.search(r'全部条文(必须|应)严格执行', text):
+                result = {'status': 'announced', 'clauses': [], 'whole_document': True,
+                          'source_page': c['sources'][0]['page']}
+                break
+            m = re.search(r'其中[，,]?第(.{1,400}?)条(?:[（(]款[)）])?为强制性条文', text)
+            if m:
+                clauses = re.findall(r'(?:[A-Z]\.)?\d+(?:\.\d+){1,3}', m.group(1))
+                if clauses:
+                    result = {'status': 'announced', 'clauses': list(dict.fromkeys(clauses)), 'whole_document': False,
+                              'source_page': c['sources'][0]['page']}
+                    break
+        cache[key] = result
         return result
 
 

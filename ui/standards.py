@@ -12,19 +12,75 @@ from evidence.standard_retrieval import StandardRetriever, standard_parts, valid
 from storage.standard_library import AssetError
 
 
+def prepare_builtin(ws, *, repair=False):
+    """Deploy prepared snapshots once per process; never import/OCR in chat."""
+    if getattr(ws, '_builtin_prepared', False) and not repair:
+        return getattr(ws, '_builtin_status', {})
+    from storage.bundled_standards import initialize_builtin
+    progress = st.empty()
+    try:
+        result = initialize_builtin(ws.standard_library(),
+            progress=lambda n,total,text: progress.progress(min(1.0,n/max(1,total)), text=text), repair=repair)
+        if result.get('status') == 'error':
+            raise AssetError(result.get('message', '规范包校验失败'))
+        if result.get('status') == 'absent':
+            st.warning('未找到内置规范包。请用包含规范资料的完整安装包修复安装；可在管理规范库中恢复。')
+        ws._builtin_status = result
+        ws._builtin_prepared = True
+        return result
+    except Exception as exc:
+        st.error(f'内置规范库暂不可用：{exc}')
+        st.caption('可点击下方重新校验恢复。若安装资源缺失或损坏，请用完整安装包覆盖安装；已有项目、聊天和自有资料会保留。')
+        if st.button('重新校验并恢复内置规范库', key='builtin-startup-repair'):
+            ws._builtin_prepared = False
+            st.rerun()
+        return {'status':'error'}
+    finally:
+        progress.empty()
+
+
 def controls(ws, asst, conv):
     library = ws.standard_library()
     collections = library.list_collections()
+    before = (conv.get('qa_options') or {}).get('collection_ids', [])
+    conv = asst.ensure_qa_selection(conv['conversation_id'])
     options = conv.get('qa_options') or {}
     cid = conv['conversation_id']
+    if before != options.get('collection_ids', []):
+        st.session_state.pop('qa-collections-'+cid, None)
     st.subheader('规范问答')
     st.caption('查阅本地资料，无需建立工程项目。可检索、可参考回答与专业审核是不同状态。')
     choices = {c['collection_id']: c['name'] for c in collections}
+    def save_option(field, key):
+        # Read the latest revision and persist only the widget the user changed.
+        saved = ws.get_conversation(cid)
+        value = st.session_state[key]
+        if field == 'answer_mode':
+            value = 'answer' if value == 'AI 解读' else 'source'
+        if field == 'project_id':
+            value = value or None
+        asst.set_qa_options(cid, dict(saved.get('qa_options') or {}, **{field:value}),
+                            user_selection=field in ('collection_ids', 'allow_model', 'answer_mode'), changed=field)
+
+    def reconcile_choices(key, available):
+        # Option loss is not a user decision. Restore saved intent when it returns.
+        signature = tuple(available)
+        if st.session_state.get(key+'-available') != signature:
+            st.session_state.pop(key, None)
+            st.session_state[key+'-available'] = signature
+
+    reconcile_choices('qa-collections-'+cid, choices)
     selected = st.multiselect('资料集', list(choices), default=[c for c in options.get('collection_ids',[]) if c in choices],
-                              format_func=lambda x: choices[x], key='qa-collections-'+cid)
+                              format_func=lambda x: choices[x], key='qa-collections-'+cid,
+                              on_change=save_option, args=('collection_ids','qa-collections-'+cid))
+    unavailable = len(set(options.get('collection_ids', [])) - set(choices))
+    st.caption(f'已选 {len(selected)} 项' + (f' · 另有 {unavailable} 项暂不可用，已保留选择' if unavailable else '')
+               + (' · 未选择资料集，不会检索全部资料' if not selected else ''))
     a,b = st.columns([3,1])
-    mode = a.radio('问答方式', ['查找原文','基于资料回答'], index=int(options.get('answer_mode')=='answer'),
-                   horizontal=True, key='qa-mode-'+cid)
+    mode = a.radio('问答方式', ['查找原文','AI 解读'], index=int(options.get('answer_mode')=='answer'),
+                   horizontal=True, key='qa-mode-'+cid,
+                   on_change=save_option, args=('answer_mode','qa-mode-'+cid),
+                   help='查找原文：只做本地检索。AI 解读：模型阅读检索到的条文片段后总结、解释并给出建议，出处由程序生成。')
     if b.button('管理规范库', icon=':material/library_books:', key='qa-manage-'+cid):
         st.session_state['dialog'] = ('standards', {})
         st.rerun()
@@ -34,59 +90,128 @@ def controls(ws, asst, conv):
     categories = sorted({d.get('category','未分类') for d in docs})
     with st.expander('筛选标准、版本与专业类别'):
         st.caption('标准身份为资料候选信息；年份不代表现行有效。问题中明确指定的版本也会严格筛选。')
-        chosen_standards = st.multiselect('标准编号候选', standards, default=[x for x in options.get('standards',[]) if x in standards], key='qa-std-'+cid)
-        chosen_versions = st.multiselect('版本年份候选', versions, default=[x for x in options.get('versions',[]) if x in versions], key='qa-ver-'+cid)
-        chosen_categories = st.multiselect('专业类别（按资料目录）', categories, default=[x for x in options.get('categories',[]) if x in categories], key='qa-cat-'+cid)
-    allow_model = st.checkbox('使用已配置模型组织本次所需证据摘录', value=options.get('allow_model',False),
+        for label, field, prefix, available in (
+            ('标准编号候选', 'standards', 'qa-std-', standards),
+            ('版本年份候选', 'versions', 'qa-ver-', versions),
+            ('专业类别（按资料目录）', 'categories', 'qa-cat-', categories),
+        ):
+            key = prefix+cid
+            reconcile_choices(key, available)
+            st.multiselect(label, available, default=[x for x in options.get(field,[]) if x in available],
+                           key=key, on_change=save_option, args=(field,key))
+    effective = asst.effective_qa_options(conv)
+    allow_model = st.checkbox('AI 解读使用已配置模型', value=effective['allow_model'],
                               disabled=mode=='查找原文', key='qa-model-'+cid,
-                              help='开启后仅向现有模型发送问题和至多4个证据片段，不发送整套PDF。配置沿用应用设置。')
-    if allow_model and mode!='查找原文':
-        st.caption(extraction.model_label() + (' · 已配置' if extraction.model_available() else ' · 未配置，将返回本地摘录'))
-    updated = dict(collection_ids=selected, standards=chosen_standards, versions=chosen_versions,
-                   categories=chosen_categories, answer_mode='answer' if mode=='基于资料回答' else 'source', allow_model=allow_model)
-    if updated != options:
-        conv = asst.set_qa_options(cid, updated)
+                              on_change=save_option, args=('allow_model','qa-model-'+cid),
+                              help='开启后向设置中的模型发送问题、项目条件和本次检索到的相关条文片段（含相邻条文、适用范围和被引用条文），'
+                                   '不发送整份PDF。关闭后只显示本地摘录；关闭选择会被记住。')
+    if mode!='查找原文':
+        if allow_model:
+            st.caption(extraction.model_label() + (' · 已配置，提问时将实际调用' if extraction.model_available()
+                                                   else ' · 未配置，将返回本地摘录'))
+        else:
+            st.caption('已关闭模型：AI 解读只返回本地检索摘录。')
+        projects = {p['project_id']: p['name'] for p in ws.list_projects()}
+        if projects:
+            current = options.get('project_id') if options.get('project_id') in projects else ''
+            st.selectbox('结合项目条件（可选）', [''] + list(projects), index=([''] + list(projects)).index(current),
+                         format_func=lambda x: projects.get(x, '不结合项目'), key='qa-project-'+cid,
+                         on_change=save_option, args=('project_id','qa-project-'+cid),
+                         help='只读取该项目已录入的参数作为解读条件，不会修改项目。')
     if not collections:
-        st.info('尚未导入规范资料。请打开管理规范库，导入已有OCR成果包。')
+        st.info('规范库暂未启用。请在“管理规范库”中恢复内置规范库；自行增加资料也可在该入口操作。')
     return conv
 
 
+def _evidence_block(run_id, hit, key_prefix, *, label=None):
+    pages = '、'.join(str(p) for p in dict.fromkeys(s['page'] for s in hit['sources']))
+    with st.expander(label or f"[{hit['evidence_id']}] {hit['filename']} · 原PDF {pages} 页"):
+        st.caption(f"标准候选：{hit['standard_code'] or '未识别'} · 版本候选：{hit['version'] or '未识别'} · {hit['section']}"
+                   + f" · 条文号候选：{hit['clause_candidate'] or '未识别'}")
+        st.caption('可参与参考摘录' if hit.get('answer_eligible') else '含数值/表格/公式或OCR质量风险：定性内容可参考，具体数值以原PDF页为准')
+        st.text(hit['text'])
+        if hit.get('context'):
+            st.caption('已补充相邻条件与例外候选；相邻段落不自动视为同一条要求。')
+        for neighbour in hit.get('context',[]):
+            st.text(f"相邻原文 [{neighbour['evidence_id']}]（{neighbour['section']}）\n{neighbour['text']}")
+            st.caption('原PDF页：' + '、'.join(str(s['page']) for s in neighbour['sources']))
+        for i, source in enumerate(hit['sources']):
+            st.caption(f"原PDF文件第 {source['page']} 页 · 处理页 {source.get('processed_page')} · 区域 {source['region']} · "
+                       f"印刷页码候选：{source.get('printed_candidate') or '未识别'}（未人工确认）")
+            if st.button(f"查看原始PDF第 {source['page']} 页", key=f"original-{key_prefix}-{hit['evidence_id']}-{i}", icon=':material/picture_as_pdf:'):
+                st.session_state['dialog'] = ('standard_original', dict(run_id=run_id, evidence_id=hit['evidence_id'], page=source['page']))
+                st.rerun()
+        for issue in hit.get('issues',[]):
+            st.caption(str(issue))
+        st.caption(f"专业审核：{hit.get('review_status') or '未复核'} · 图像抽查：{hit.get('sample_review_status') or '未抽查'} · "
+                   f"现行状态：{hit.get('current_status') or '待核实'} · 引用校验不等于专业复核")
+
+
+def model_record_text(record):
+    record = record or {}
+    if not record.get('attempted'):
+        return '未调用模型：' + (record.get('reason') or '本次不需要模型')
+    head = f"已实际调用 {record.get('provider_label') or record.get('provider')}（{record.get('model')}，{record.get('endpoint') or '默认地址'}）"
+    if record.get('ok'):
+        return head + f" · 成功 · 用时 {record.get('duration_ms', 0) / 1000:.1f} 秒" + (
+            f" · 阅读 {record['evidence_count']} 个片段" if record.get('evidence_count') else '')
+    return head + ' · 失败并回退：' + (record.get('reason') or '未知原因')
+
+
 def citation_card(ws, run):
+    from agent.standard_qa import KIND_TEXT
+    from agent.claim_check import STATUS_TEXT
     response = run['answer']
+    interp = response.get('interpretation') if response.get('mode') == 'model' else None
     st.caption(response['limits'])
     for gap in response.get('gaps',[]):
         st.caption(gap)
-    for hit in response['evidence']:
-        pages = '、'.join(str(p) for p in dict.fromkeys(s['page'] for s in hit['sources']))
-        label = f"[{hit['evidence_id']}] {hit['filename']} · 原PDF {pages} 页"
-        with st.expander(label):
-            st.caption(f"标准候选：{hit['standard_code'] or '未识别'} · 版本候选：{hit['version'] or '未识别'} · {hit['section']}"
-                       + f" · 条文号候选：{hit['clause_candidate'] or '未识别'}")
-            st.caption('可参与参考摘录' if hit['answer_eligible'] else '仅供检索定位；不能据此确认数值或要求')
-            st.text(hit['text'])
-            st.caption('已补充相邻条件与例外候选；相邻段落不自动视为同一条要求。')
-            for neighbour in hit.get('context',[]):
-                st.text(f"相邻原文 [{neighbour['evidence_id']}]（{neighbour['section']}）\n{neighbour['text']}")
-                st.caption('原PDF页：' + '、'.join(str(s['page']) for s in neighbour['sources']))
-            for i, source in enumerate(hit['sources']):
-                st.caption(f"原PDF第 {source['page']} 页 · 处理页 {source.get('processed_page')} · 区域 {source['region']} · "
-                           f"印刷页码候选：{source.get('printed_candidate') or '未识别'}（未人工确认）")
-                if st.button(f"查看原始PDF第 {source['page']} 页", key=f"original-{run['run_id']}-{hit['evidence_id']}-{i}", icon=':material/picture_as_pdf:'):
-                    st.session_state['dialog'] = ('standard_original', dict(run_id=run['run_id'], evidence_id=hit['evidence_id'], page=source['page']))
-                    st.rerun()
-            for issue in hit.get('issues',[]):
-                st.caption(str(issue))
-            st.caption(f"专业审核：{hit.get('review_status') or '未复核'} · 图像抽查：{hit.get('sample_review_status') or '未抽查'} · "
-                       f"现行状态：{hit.get('current_status') or '待核实'} · 引用校验不等于专业复核")
+    if interp:
+        by_id = {h['evidence_id']: h for h in response['evidence'] + response.get('context_evidence', [])}
+        st.markdown('**备注 · 依据出处**（由程序按资料登记信息生成）')
+        for note in interp.get('notes', []):
+            hit = by_id.get(note['evidence_id'])
+            st.caption(f"[{note['n']}] {note['standard_code']}-{note['version']}《{note['title'][:40]}》第 {note['clause']} 条（候选）· "
+                       f"{note['pages']} · {note['level']}，{note['nature']} · {note['force']} · 现行状态：{note['current_status']}")
+            if hit:
+                _evidence_block(run['run_id'], hit, run['run_id'] + '-n', label=f"[{note['n']}] 展开原文与原PDF入口 · {hit['filename']}")
+        flagged = [c for c in interp['claims'] if c['status'] != 'verified_source']
+        with st.expander(f"校验说明 · {response['validation'].get('shown', 0)} 条显示，{response['validation'].get('restricted', 0)} 条移除，"
+                         f"{response['validation'].get('flagged', 0)} 条附注意事项"):
+            st.caption(response['validation'].get('method', ''))
+            st.caption('“来源与原文定位已校验”只说明依据编号、原文和页码对得上，不代表解释在语义上完全正确；模型自评不计入校验。')
+            for c in flagged:
+                st.markdown(f"- **{STATUS_TEXT[c['status']]}** · {KIND_TEXT.get(c['kind'], c['kind'])}：{c['text']}")
+                for x in c.get('problems', []) + c.get('flags', []):
+                    st.caption('　' + x)
+            if interp.get('summary_problems'):
+                st.caption('总结未通过：' + '；'.join(interp['summary_problems']))
+        others = [h for h in response['evidence'] if h['evidence_id'] not in interp.get('citation_order', [])]
+        if others:
+            with st.expander(f'其他检索候选（{len(others)} 处，本次解读未引用）'):
+                for hit in others:
+                    pages = '、'.join(str(p) for p in dict.fromkeys(s['page'] for s in hit['sources']))
+                    st.caption(f"{hit['filename']} · 第 {hit.get('clause_candidate') or '未识别'} 条 · 原PDF {pages} 页")
+    else:
+        for hit in response['evidence']:
+            _evidence_block(run['run_id'], hit, run['run_id'])
+    st.caption('模型状态：' + model_record_text(response.get('model_record')))
 
 
 @st.dialog('原始PDF复核', width='large')
 def original_dialog(ws, run_id, evidence_id, page):
     library = ws.standard_library()
     run = ws.get_run(run_id)
+    if not run and str(run_id).startswith('ANA'):
+        analysis = ws.get_analysis(run_id)
+        if analysis:
+            hits = [h for it in analysis['check'].get('items', []) for h in it.get('evidence', [])]
+            run = {'requested_task': 'standard_qa', 'answer': {'evidence': hits},
+                   'options': {'collection_ids': analysis['check'].get('evidence_version', {}).get('collections', [])}}
     if not run or run.get('requested_task')!='standard_qa':
         st.error('引用运行记录不存在'); return
-    hit = next((h for h in run['answer']['evidence'] if h['evidence_id']==evidence_id),None)
+    answer = run['answer']
+    hit = next((h for h in answer['evidence'] + answer.get('context_evidence', []) if h['evidence_id']==evidence_id),None)
     if not hit or not validate_evidence(library,hit,run['options'].get('collection_ids',[])):
         st.error('引用已失效或资料已更新，请重新检索。'); return
     if page not in {s['page'] for s in hit['sources']}:
@@ -107,12 +232,29 @@ def original_dialog(ws, run_id, evidence_id, page):
 @st.dialog('管理规范库', width='large')
 def library_dialog(ws):
     library = ws.standard_library()
-    st.caption('专用导入只读取逐页文本、页码映射和质量清单，不重跑OCR，不修改原件或处理成果。')
-    base = Path(__file__).resolve().parents[2]
-    source = st.text_input('原始PDF目录（只读）', str(base/'幕墙规范资料'))
-    package = st.text_input('OCR成果包目录（只读）', str(base/'幕墙规范资料_处理成果'))
-    name = st.text_input('资料集名称', '幕墙规范资料')
-    if st.button('导入或增量更新成果包', icon=':material/sync:', type='primary'):
+    st.caption('内置规范库随安装提供，可离线检索和查看原始PDF。可检索不代表可可靠回答，也不代表已经专业审核。')
+    with st.expander('内置规范库维护与恢复'):
+        st.caption('修复会校验安装资源并重新部署预建索引，不重跑OCR。升级安装会更新内置包，保留项目、聊天和自有规范资料。')
+        if st.button('校验并恢复内置规范库', key='builtin-repair'):
+            result = prepare_builtin(ws, repair=True)
+            if result.get('status') not in ('error','absent'):
+                st.success('内置规范库已恢复。')
+            elif result.get('status')=='absent':
+                st.error('未找到随安装提供的规范包，请使用完整安装包覆盖安装。')
+        st.caption('停用仅移除当前用户的内置库登记与索引；安装资源保留，可随时恢复。清空项目或聊天不会执行此操作。')
+        remove = st.checkbox('确认停用当前用户的内置规范库', key='builtin-remove-confirm')
+        if st.button('停用内置规范库', disabled=not remove, key='builtin-remove'):
+            from storage.bundled_standards import remove_builtin
+            remove_builtin(library)
+            ws._builtin_prepared = False
+            st.rerun()
+    with st.expander('高级：增加或更新自己的规范资料'):
+        st.caption('专用导入只读取逐页文本、页码映射和质量清单，不重跑OCR，不修改原件或处理成果。普通文件库上传不能代替规范库导入。')
+        source = st.text_input('原始PDF目录（只读）', '')
+        package = st.text_input('OCR成果包目录（只读）', '')
+        name = st.text_input('资料集名称', '我的规范资料')
+        import_clicked = st.button('导入或增量更新成果包', icon=':material/sync:', disabled=not source.strip() or not package.strip())
+    if import_clicked:
         progress = st.progress(0, text='核对成果包清单…')
         try:
             report = import_ocr_package(library, source, package, name,
@@ -129,6 +271,8 @@ def library_dialog(ws):
     for collection in library.list_collections():
         cid = collection['collection_id']
         st.subheader(collection['name'])
+        if collection.get('bundle_version'):
+            st.caption('内置规范包版本：'+str(collection['bundle_version']))
         retriever = StandardRetriever(library)
         try:
             stale = retriever.stale(cid) or library.source_status(cid)['stale']

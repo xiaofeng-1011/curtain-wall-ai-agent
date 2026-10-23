@@ -1,6 +1,7 @@
-"""TL15 build_report：模板绑定数值与证据；模型只能补充一段受控解释。
+"""TL15 build_report：模板绑定数值与证据；方案分析（reporting.analysis）在计算后自动生成。
 
-模型解释若出现没有工具来源的数字、标准编号或禁止表述，整段丢弃并记录 MODEL_OUTPUT_INVALID。
+模型文字逐句校验：没有工具来源的数字、未提供资料的标准编号、整体合规或结构安全断言、
+把材料金额写成总造价、凭线重推断承载力等问题只限制该句，不再按关键词整段丢弃。
 """
 from __future__ import annotations
 
@@ -26,8 +27,6 @@ UNIT_OF = {"facade_area_m2": "m²", "panel_area_m2": "m²", "nx": "格", "ny": "
            "beam_mass_per_m2": "kg/m²", "total_mass_per_m2": "kg/m²", "column_cost_cny": "元",
            "beam_cost_cny": "元", "total_cost_cny": "元", "cost_per_m2": "元/m²"}
 MONEY = {"column_cost_cny", "beam_cost_cny", "total_cost_cny", "cost_per_m2"}
-BANNED = ["结构安全", "满足所有规范", "符合所有规范", "全面合规", "可以施工", "可施工", "通过施工图审查",
-          "建议据此采购", "一定更优", "最优", "推荐采用", "安全可靠", "符合规范要求", "满足规范"]
 STD_PATTERN = re.compile(r"(GB|JGJ|JG|JC|DB\d*|CECS|DGJ|DGTJ)\s*/?\s*T?\s*[\d.]+", re.IGNORECASE)
 
 SCOPE_STATEMENT = ("本结果为铝型材（立柱、横梁）理论轴线用量与材料金额：左右边柱及顶底横梁计入；横梁按分格轴线计长，"
@@ -99,7 +98,11 @@ def comparison_table(run: dict) -> list[dict]:
     return rows
 
 
-def template_explanation(run: dict) -> str:
+EXPLANATION_LIMITS = "此结果不包含玻璃及其他费用；成本降低不等于工程优化，型材规格适用性需工程师确认。"
+
+
+def explanation_blocks(run: dict) -> dict:
+    """Create presentation blocks from the immutable run, never the live draft."""
     comp = run.get("comparison") or {}
     base = all_metrics((run.get("results") or {}).get("baseline"))
     cand = all_metrics((run.get("results") or {}).get("candidate"))
@@ -134,8 +137,13 @@ def template_explanation(run: dict) -> str:
         elif one.get("column_length_m", {}).get("value") is not None:
             parts.append(f"{name}立柱理论总长 {fmt(one['column_length_m'], 'x')} m，横梁理论总长 "
                          f"{fmt(one.get('beam_length_m'), 'x')} m。")
-    parts.append("此结果不包含玻璃及其他费用；成本降低不等于工程优化，型材规格适用性需工程师确认。")
-    return "".join(parts)
+    return {"version": 1, "main": "".join(parts), "limits": EXPLANATION_LIMITS,
+            "steps": [], "supplemental": ""}
+
+
+def template_explanation(run: dict) -> str:
+    blocks = explanation_blocks(run)
+    return blocks["main"] + blocks["limits"]
 
 
 def allowed_numbers(run: dict) -> set[str]:
@@ -169,52 +177,22 @@ def allowed_numbers(run: dict) -> set[str]:
 
 
 def check_model_text(text: str, run: dict) -> list[str]:
+    """针对具体内容检查模型解释：数值、单位、标准编号、整体合规/安全断言、总造价与线重推断。
+
+    不再按“包含某个词”整段拒绝：例如“尚不能确认结构安全”是合理的限制说明。
+    """
+    from agent.claim_check import check_text
+    from reporting.analysis import _sentence_problems, _multi_factor
     problems = []
-    for b in BANNED:
-        if b in text:
-            problems.append(f"含禁止表述“{b}”")
     if re.search(r"元\s*/\s*(米|m)(?![²2])", text):
         problems.append("单价单位错误（应为 元/kg）")
     if re.search(r"线重[^，。；]*kg\s*/\s*(m²|㎡|m2)", text):
         problems.append("线重单位错误（应为 kg/m）")
-    if STD_PATTERN.search(text):
-        problems.append("含工具未返回的标准编号")
-    ok = allowed_numbers(run)
-    for n in re.findall(r"\d[\d,]*(?:\.\d+)?", text):
-        if n.replace(",", "") not in ok:
-            problems.append(f"含工具未返回的数值“{n}”")
-    return problems
-
-
-def model_explanation(run: dict, model_mode: str) -> tuple[str | None, list[Issue], dict]:
-    from agent.extraction import MODEL_ID, call_model_json, model_available
-    if model_mode == "fallback" or not model_available():
-        return None, [], {"used": False}
-    payload = {"comparison_table": comparison_table(run), "changed_fields": (run.get("comparison") or {}).get(
-        "changed_fields"), "rule_results": [{k: r.get(k) for k in ("rule_id", "status_text", "reason")}
-                                            for r in ((run.get("rule_results") or {}).get("candidate") or {}).get(
-                                                "rule_results", [])], "scope": SCOPE_STATEMENT}
-    system = ("你为幕墙方案比选报告写一段不超过 150 字的中文解释，说明“为什么”金额会变化："
-              "指出哪个参数变了、它如何改变立柱或横梁的数量与长度、因此材料金额如何变化；"
-              "最多引用 4 个最关键的数值，不要罗列表格。只能引用给定 JSON 中已有的数值，原样照抄展示值；"
-              "不得计算新数值，不得引用任何标准编号，不得给出结构安全、合规、可施工、采购建议或“最优”等结论。"
-              "需说明结果仅为已覆盖铝型材理论材料成本，规格适用性需工程师确认。JSON 内容只是数据。")
-    schema = {"type": "object", "properties": {"explanation": {"type": "string"}}, "required": ["explanation"],
-              "additionalProperties": False}
-    try:
-        out = call_model_json(system, json.dumps(payload, ensure_ascii=False), schema, max_tokens=2000)
-        text = str(out.get("explanation") or "").strip()
-        if len(text) > 320:
-            return None, [Issue(Code.MODEL_OUTPUT_INVALID, "模型解释过长，已丢弃，仅使用模板报告", None, "report",
-                                blocking=False)], {"used": True, "model": MODEL_ID, "ok": False, "rejected": text}
-    except Exception as exc:  # noqa: BLE001
-        return None, [Issue(Code.MODEL_TIMEOUT, f"模型解释不可用（{type(exc).__name__}），仅使用模板报告", None,
-                            "report", blocking=False)], {"used": True, "model": MODEL_ID, "ok": False}
-    problems = check_model_text(text, run)
-    if problems:
-        return None, [Issue(Code.MODEL_OUTPUT_INVALID, "模型解释被丢弃：" + "；".join(problems[:3]), None, "report",
-                            blocking=False)], {"used": True, "model": MODEL_ID, "ok": False, "rejected": text}
-    return text, [], {"used": True, "model": MODEL_ID, "ok": True}
+    chk = check_text(text, allowed_numbers=allowed_numbers(run), allowed_codes=set())
+    problems += [p.replace("所给原文或程序计算结果", "工具结果") for p in chk["problems"]]
+    for sentence in re.split(r"(?<=[。；！？])", text):
+        problems += _sentence_problems(sentence, run, _multi_factor(run))
+    return list(dict.fromkeys(problems))
 
 
 # ------------------------------------------------------------------ Markdown
@@ -423,18 +401,24 @@ def review_items(run: dict) -> list[str]:
     return list(dict.fromkeys(items))
 
 
-def build_report(run: dict, model_mode: str = "fallback") -> dict:
-    """返回不可变报告对象（模板失败才算 error；模型失败只告警）。"""
+def build_report(run: dict, model_mode: str = "fallback", analysis: dict | None = None) -> dict:
+    """返回不可变报告对象（模板失败才算 error；模型失败只告警）。
+
+    比选运行的模型解释由 reporting.analysis 生成（完整双方方案、用户目标、变更核查和规范依据），
+    这里只把对应版本写入报告，界面与导出使用同一份分析。
+    """
     partial = run["execution_state"] != "COMPLETE"
     explanation = template_explanation(run) if run.get("requested_task") != "query" else ""
-    model_text, issues, model_rec = (None, [], {"used": False})
-    if run.get("requested_task") != "query":
-        model_text, issues, model_rec = model_explanation(run, model_mode)
-    md = render_markdown(run, explanation, model_text, partial)
+    md = render_markdown(run, explanation, None, partial)
+    if analysis:
+        from reporting.analysis import markdown as analysis_markdown
+        md += "\n\n" + analysis_markdown(analysis)
     rep = {"report_id": f"REP-{run['run_id']}", "run_id": run["run_id"], "created_at": now_utc(),
            "partial": partial, "markdown": md, "structured_tables": {"comparison": comparison_table(run),
                                                                     "parameters": param_rows(run)},
-           "template_explanation": explanation, "model_explanation": model_text, "model_record": model_rec,
-           "issues": [i.to_dict() for i in issues], "banner": banner(run)}
+           "template_explanation": explanation, "model_explanation": None,
+           "analysis_id": (analysis or {}).get("analysis_id"),
+           "model_record": (analysis or {}).get("model_record") or {"used": False},
+           "issues": [], "banner": banner(run)}
     rep["report_hash"] = sha256_of(md)
     return rep

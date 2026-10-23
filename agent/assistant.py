@@ -17,21 +17,24 @@ from pathlib import Path
 from domain.contracts import Code, GenerationMethod, calc, dec, dstr, new_id, now_utc
 from domain.fields import USER_FIELDS
 from domain.units import conversion_note, parse_quantity
-from reporting.report import all_metrics, check_model_text, fmt, model_explanation, template_explanation
+from reporting.analysis import detect_goals
+from reporting.report import all_metrics, fmt, template_explanation, explanation_blocks
 from storage.workspace import StoreError, Workspace
 from storage.titles import auto_title, backfill_title
 
-from . import documents, engine, extraction, importer, parser, planner
+from . import change_intent, documents, engine, extraction, importer, parser, planner
 from . import projects as P
 
 TABLE_EXT = (".xlsx", ".xlsm", ".xls", ".csv")
-DOC_EXT = (".pdf", ".txt", ".md", ".doc", ".docx")
+# 资料格式：documents 支持的所有格式，减去走表格导入的表格格式
+DOC_EXT = tuple(e for e in documents.SUPPORTED if e not in TABLE_EXT)
 HELP_TEXT = ("我可以帮你：\n"
              "1. **建立方案**：描述幕墙总宽、总高、分格宽高（矩形等距构件式玻璃幕墙），也可以粘贴表格或上传 Excel；\n"
              "2. **计算**立面面积、立柱横梁理论长度、型材质量和材料金额（需要线重和未税单价）；\n"
              "3. **比较**原方案与调整方案，例如“把分格宽改为 1.5m，与原方案比较”，并解释差异；\n"
-             "4. **查找资料**：在你上传的 PDF/TXT 资料中检索片段（资料未经审核，仅供查阅）。\n\n"
-             "结果只是立柱横梁的理论材料金额，不含玻璃、损耗与安装，不作结构安全验算或工程签审。")
+             "4. **查规范、问要求**：在内置规范库中检索原文；配置模型后由 AI 解读条文、结合项目给出建议，并附原 PDF 出处；\n"
+             "5. **修改方案后自动分析**：重新计算后说明两个方案各自适合的条件、按你的目标更倾向哪个，以及还需补充的验算。\n\n"
+             "结果只是立柱横梁的理论材料金额，不含玻璃、损耗与安装；规范核查只针对单项，不作结构安全验算或工程签审。")
 TASK_BUTTONS = [("计算面积和长度", "length"), ("计算型材用量", "mass"), ("计算材料金额", "cost")]
 
 
@@ -72,8 +75,10 @@ class Assistant:
                 "skipped": [], "last_field": None, "last_run_id": None, "pending_query": None,
                 "last_change_msg": None, "model_mode": "auto", "seq": 0, "mode": mode}
         if mode == "standard_qa":
-            conv["qa_options"] = {"collection_ids": [], "standards": [], "versions": [], "categories": [],
-                                  "answer_mode": "source", "allow_model": False}
+            conv["qa_options"] = {"collection_ids": self.ws.default_standard_selection(), "standards": [], "versions": [], "categories": [],
+                                  "answer_mode": self.ws.get_setting("standard_answer_mode", "answer"),
+                                  "allow_model": bool(self.ws.get_setting("standard_allow_model", True))}
+            conv['qa_selection_explicit'] = self.ws.get_setting('standard_collection_selection') is not None
         if p:
             conv["messages"].append(self._msg(conv, "assistant", f"已打开项目“{p['name']}”。可以继续修改参数或要求计算。",
                                               kind="info"))
@@ -186,21 +191,91 @@ class Assistant:
             self._say(t, e.message, kind="error")
         return self._commit(t)
 
-    def set_qa_options(self, conv_id: str, options: dict) -> dict:
+    def ensure_qa_selection(self, conv_id: str) -> dict:
+        conv = self.ws.get_conversation(conv_id)
+        if conv and conv.get('mode') == 'standard_qa' and not conv.get('qa_selection_explicit') and not (conv.get('qa_options') or {}).get('collection_ids'):
+            selected = self.ws.default_standard_selection()
+            if selected:
+                conv = self.set_qa_options(conv_id, dict(conv.get('qa_options') or {}, collection_ids=selected), user_selection=False)
+        return conv
+
+    def set_qa_options(self, conv_id: str, options: dict, *, user_selection: bool = True, changed: str | None = None) -> dict:
         conv = self.ws.get_conversation(conv_id)
         if not conv or conv.get("mode") != "standard_qa":
             raise AssistantError(Code.VALUE_INVALID, "仅规范问答会话可设置资料范围")
-        keys = ("collection_ids", "standards", "versions", "categories", "answer_mode", "allow_model")
+        keys = ("collection_ids", "standards", "versions", "categories", "answer_mode", "allow_model", "project_id")
+        previous = conv.get("qa_options") or {}
         conv["qa_options"] = {k: options[k] for k in keys if k in options}
+        if user_selection and 'collection_ids' in options and changed in (None, 'collection_ids'):
+            conv['qa_selection_explicit'] = True
+            self.ws.set_setting('standard_collection_selection', list(options['collection_ids']))
+        # 只有用户实际操作开关时才记为明确选择，并作为以后新会话的默认值。
+        if user_selection and "allow_model" in options and (changed == "allow_model" or (
+                changed is None and options["allow_model"] != previous.get("allow_model"))):
+            conv["qa_model_explicit"] = True
+            self.ws.set_setting("standard_allow_model", bool(options["allow_model"]))
+        if user_selection and options.get("answer_mode") and (changed == "answer_mode" or (
+                changed is None and options["answer_mode"] != previous.get("answer_mode"))):
+            self.ws.set_setting("standard_answer_mode", options["answer_mode"])
         return self.ws.save_conversation(conv, conv["rev"])
+
+    def effective_qa_options(self, conv: dict) -> dict:
+        """实际使用的问答选项。
+
+        V4 新建会话时写入的 allow_model=False 只是默认值，不是用户选择；已配置模型时按开启处理。
+        用户在本会话明确关闭过，或保存过全局偏好，则尊重该选择。
+        """
+        options = dict(conv.get("qa_options") or {})
+        if conv.get("qa_model_explicit"):
+            options["allow_model"] = bool(options.get("allow_model"))
+        else:
+            options["allow_model"] = bool(self.ws.get_setting("standard_allow_model", True))
+        return options
 
     def _standard_query(self, t: _Turn, text: str, msg_id: str):
         run = engine.run_standard_query(self.ws, query_text=text, conversation_id=t.conv["conversation_id"],
                                        request_id=f"{t.conv['conversation_id']}:{msg_id}:standard_qa",
-                                       options=t.conv.get("qa_options") or {})
+                                       options=self.effective_qa_options(t.conv))
         t.conv["last_run_id"] = run["run_id"]
         self._say(t, run["answer"]["text"], kind="query", card={"type": "standard_qa", "run_id": run["run_id"]},
                   note=run["answer"]["notice"])
+
+    # ================================================================ 项目中的规范咨询与单项核查
+    def _standards_ready(self) -> list[str]:
+        library = self.ws.standard_library()
+        return [c for c in self.ws.default_standard_selection() if library.get_collection(c)]
+
+    def _project_context(self, t: _Turn) -> dict | None:
+        ctx = engine.project_conditions(self.ws, (t.project or {}).get("project_id"))
+        run = self.ws.get_run(t.conv.get("last_run_id"), (t.project or {}).get("project_id"))
+        if ctx and run and run.get("requested_task") not in ("query", "standard_qa"):
+            ctx["最近一次计算"] = self._conclusion(run) + ("" if engine.is_current(t.project, run) else "（参数之后已修改）")
+            analysis = self.ws.get_analysis(run.get("analysis_id"))
+            if analysis:
+                from evidence.change_check import summary_lines
+                ctx["变更核查"] = summary_lines(analysis["check"])
+        if ctx and t.conv.get("goals"):
+            ctx["用户目标"] = t.conv["goals"]
+        return ctx
+
+    def _consult(self, t: _Turn, text: str, msg_id: str, *, prefix: str = "", kind: str = "query",
+                 actions: list | None = None, note: str | None = None) -> bool:
+        """在项目会话中查规范并由 AI 解读，结合当前项目条件。规范库不可用时返回 False。"""
+        collections = self._standards_ready()
+        if not collections:
+            return False
+        options = {"collection_ids": collections, "answer_mode": "answer",
+                   "allow_model": t.conv.get("model_mode") != "fallback"
+                   and bool(self.ws.get_setting("standard_allow_model", True))}
+        run = engine.run_standard_query(self.ws, query_text=text, conversation_id=t.conv["conversation_id"],
+                                       request_id=f"{t.conv['conversation_id']}:{msg_id}:consult",
+                                       options=options, project_context=self._project_context(t))
+        answer = run["answer"]
+        body = (prefix + "\n\n**相关规范要求**\n\n" if prefix else "") + answer["text"]
+        t.conv["last_consult_run_id"] = run["run_id"]
+        self._say(t, body, kind=kind, card={"type": "standard_qa", "run_id": run["run_id"]},
+                  note="；".join(x for x in (note, answer["notice"]) if x), actions=actions)
+        return True
 
     # ================================================================ 文本
     def _context(self, t: _Turn) -> dict:
@@ -238,17 +313,37 @@ class Assistant:
             note = "在线理解暂不可用，本轮使用本地解析；你也可以点“查看参数”用表单填写。"
         intents = set(und["intents"])
         pend = t.conv.get("pending") or {}
+        goals = detect_goals([text])
+        if goals:
+            t.conv["goals"] = list(dict.fromkeys((t.conv.get("goals") or []) + goals))
 
-        # 资料查阅优先承接要求查询；明确判断当前方案安全时仍走能力边界。
-        if (parser.is_reference_query(text) or "query" in intents) and not und["patches"] and not parser.is_safety_request(text):
-            self._query(t, text, msg_id)
+        # 结构安全、承载力、挠度等整体验算是能力边界；“是否满足某项要求”是可以有依据回答的单项核查。
+        full_safety = parser.is_safety_request(text) and bool(re.search(r"结构|安全|承载|挠度|强度|验算", text))
+        single_check = bool(parser.is_safety_request(text) or re.search(
+            r"是否(符合|满足|合规)|合不合规|符不符合|满不满足|有没有违反", text)) and not full_safety
+        # “分格宽 1.5m 是否满足要求？”是提问，其中的数值是核查条件，不是修改指令。
+        asking = single_check and re.search(r"是否|吗|？|\?|能不能|可不可以|行不行", text) \
+            and not re.search(r"改|调整|设为|换成|变为|加大|减小", text)
+        if (parser.is_reference_query(text) or "query" in intents or single_check) and (not und["patches"] or asking) \
+                and not full_safety:
+            prefix = ("这是单项核查问题：下面依据检索到的条文说明判断条件、当前方案已知的参数和还缺的参数；"
+                      "能判断的单项会明确说明，但不能据此推出工程整体合规。") if single_check and t.project else ""
+            consulted = self._consult(t, text, msg_id, prefix=prefix, note=note)
+            # 用户自己上传的普通资料继续按原方式检索。
+            if not consulted or self.ws.list_documents():
+                self._query(t, text, msg_id)
             return
 
-        # 1. 超出范围
-        if und["scope_hints"] or parser.is_safety_request(text):
-            self._say(t, parser.scope_message(und["scope_hints"] or ["完整结构计算"]) + "\n\n可以继续的事：描述矩形构件式幕墙的尺寸和分格，"
-                         "计算立柱横梁理论用量与材料金额，或查找你上传的资料。", kind="scope", note=note,
-                      actions=[{"label": "这是资料查询", "action": "force_query", "payload": {"text": text}}])
+        # 1. 超出计算范围：说明边界，同时给出能完成的单项依据和下一步，而不是只返回免责声明
+        if und["scope_hints"] or full_safety:
+            boundary = (parser.scope_message(und["scope_hints"] or ["完整结构计算"]) + "\n\n可以继续的事：描述矩形构件式幕墙的尺寸和分格，"
+                        "计算立柱横梁理论用量与材料金额，或查找相关规范要求和验算所需条件。")
+            acts = [{"label": "这是资料查询", "action": "force_query", "payload": {"text": text}}]
+            consulted = full_safety and t.project is not None and self._consult(
+                t, text, msg_id, kind="scope", actions=acts, note=note,
+                prefix=boundary + "\n\n下面先列出相关条文、判断条件和需要补充的参数（单项说明，不是结构安全结论）。")
+            if not consulted:
+                self._say(t, boundary, kind="scope", note=note, actions=acts)
             return
         # 2. 确认卡 / 零价确认 / 跳过
         if und["confirm"] and pend.get("type") == "confirm":
@@ -310,6 +405,8 @@ class Assistant:
                 changed = self._modify(t, und, text, msg_id, note)
                 if changed is None:
                     return
+        elif t.project is not None and change_intent.detect(text) and self._vague_change(t, text, note):
+            return
         elif und["ambiguous"]:
             a = und["ambiguous"][0]
             self._say(t, f"“{a['text']}”{a['reason']}。请说明它对应哪个参数，例如“分格宽 1.5 m”或“幕墙总宽 18 m”。",
@@ -328,12 +425,41 @@ class Assistant:
             return
         if changed:
             return
+        if t.project is not None and self._vague_change(t, text, note):
+            return
+        if goals:
+            self._say(t, f"已记录你的决策目标：{'、'.join(t.conv['goals'])}。之后每次修改方案并重新计算，分析会按这个目标给出倾向，"
+                         "并说明成立条件；不会因此改动任何参数。", kind="info", note=note)
+            return
         if t.project is None:
             self._say(t, "我还没有识别到方案参数。可以这样描述：“幕墙宽 18 m、高 6 m，分格宽 1.2 m、高 1.5 m，先算型材用量”；"
                          "也可以粘贴表格或上传 Excel。只查资料可以直接提问。", kind="info", note=note)
         else:
             self._say(t, "我没有理解要修改或计算什么。可以说“把分格宽改为 1.5 m”“算材料金额”“为什么金额减少”。",
                       kind="info", note=note)
+
+    # ================================================================ 修改意图（未给数值）
+    def _vague_change(self, t: _Turn, text: str, note: str | None) -> bool:
+        intent = change_intent.detect(text)
+        if not intent:
+            return False
+        p = t.project
+        use_model = extraction.model_available() and t.conv.get("model_mode") != "fallback"
+        advice = change_intent.advise(text, p, intent, use_model)
+        role = "candidate" if P.has_candidate(p) or p.get("ran") else "baseline"
+        record = advice.get("model_record") or {}
+        t.conv["pending_change"] = {"intent": intent, "text": text, "at": now_utc(), "role": role,
+                                    "model_record": record}
+        source = (f"修改理解由模型生成（{record.get('model')}），参数数值仍需你提供" if advice["source"] == "model"
+                  else "修改理解使用本地规则" + (f"（{record.get('reason')}）" if record.get("reason") else ""))
+        field = intent["fields"][0]
+        self._say(t, change_intent.render(advice, intent), kind="question", note="；".join(x for x in (note, source) if x),
+                  card={"type": "question", "field": field, "level": USER_FIELDS[field]["level"], "pending_change": True})
+        # 只有一个数值字段时，下一句回答的数值直接对应它；方案参数在回答前保持不变。
+        t.conv["pending"] = {"type": "question", "field": field, "role": role,
+                             "task": "compare" if role == "candidate" else "auto",
+                             "text": advice["questions"][0], "code": "CHANGE_VALUE"}
+        return True
 
     # ================================================================ 修改
     def _resolve_target(self, t: _Turn, und: dict) -> tuple[str, bool]:
@@ -367,6 +493,8 @@ class Assistant:
                       note=note)
             return None
         role, create = self._resolve_target(t, und)
+        compare_role = role if role in p["schemes"] else "baseline"
+        warnings = change_intent.contradiction(text, p, compare_role, und["patches"])
         P.push_undo(p, f"“{text[:24]}”")
         created_cand = P.ensure_candidate(p) if create or role == "candidate" else False
         declared = "synthetic" if und.get("source_decl") == "synthetic" else None
@@ -407,6 +535,9 @@ class Assistant:
         body = head + "；".join(changes) + tail if changes else ""
         if problems:
             body += ("\n\n" if body else "") + "未更新：" + "；".join(problems)
+        if warnings:
+            body += "\n\n" + "\n".join(f"注意：{w}" for w in warnings)
+        t.conv.pop("pending_change", None)
         if und.get("source_decl") == "synthetic":
             body += "\n\n本轮录入的数据标为演示数据（synthetic）。"
         elif und.get("source_decl") == "real":
@@ -525,9 +656,11 @@ class Assistant:
     def _run(self, t: _Turn, task: str, msg_id: str, *, note: str | None = None):
         p = t.project
         mode = "online" if extraction.model_available() and t.conv.get("model_mode") != "fallback" else "fallback"
+        recent = [m["text"] for m in t.conv["messages"] if m["role"] == "user" and m.get("text")][-6:]
         run = engine.run_task(self.ws, p, conversation_id=t.conv["conversation_id"],
                               request_id=f"{t.conv['conversation_id']}:{msg_id}:{task}", task=task, model_mode=mode,
-                              change_reason=(p["schemes"].get("candidate") and "调整方案相对原方案") or "")
+                              change_reason=(p["schemes"].get("candidate") and "调整方案相对原方案") or "",
+                              analysis_context={"goals": t.conv.get("goals") or [], "recent": recent})
         t.conv["last_run_id"] = run["run_id"]
         t.conv["computed"] = True
         t.conv["pending"] = None
@@ -535,6 +668,9 @@ class Assistant:
             p["ran"] = True
             t.project_dirty = True
         self._say(t, self._conclusion(run), kind="result", card={"type": "result", "run_id": run["run_id"]}, note=note)
+        analysis = self.ws.get_analysis(run.get("analysis_id"))
+        if analysis:
+            self._say_analysis(t, analysis)
         if run["execution_state"] != "COMPLETE":
             pl = planner.plan(p, task)
             q = planner.pick_question(pl, t.conv.get("skipped", []), task=task)
@@ -654,13 +790,23 @@ class Assistant:
         return txt
 
     # ================================================================ 解释
+    def _say_analysis(self, t: _Turn, analysis: dict, *, prefix: str = ""):
+        blocks = dict(analysis["blocks"])
+        if prefix:
+            blocks["main"] = prefix + "\n\n" + blocks["main"]
+        self._say(t, blocks["main"], kind="analysis", note=blocks["origin"],
+                  card={"type": "analysis", "run_id": analysis["run_id"], "analysis_id": analysis["analysis_id"],
+                        "blocks": blocks},
+                  actions=[{"label": "重新生成分析", "action": "regen_analysis", "payload": {"run_id": analysis["run_id"]}}])
+
     def _explain(self, t: _Turn):
         p = t.project
         run = self.ws.get_run(t.conv.get("last_run_id"), (p or {}).get("project_id"))
-        if run is None or run.get("requested_task") == "query":
+        if run is None or run.get("requested_task") in ("query", "standard_qa"):
             self._say(t, "还没有可以解释的计算结果。先告诉我方案参数并要求计算。", kind="info")
             return
         stale = "" if engine.is_current(p, run) else "（注意：参数在这次计算后已修改，以下解释针对上次结果。）\n\n"
+        blocks = explanation_blocks(run)
         lines = [template_explanation(run)]
         for role in ("baseline", "candidate"):
             res = (run.get("results") or {}).get(role) or {}
@@ -669,13 +815,19 @@ class Assistant:
                      and not s["step_id"].endswith(("per_m2", "_count", "_rows", "_segments"))]
             if steps:
                 name = P.ROLE_NAME[role] if len(run.get("results") or {}) > 1 else "计算"
-                lines.append(f"\n**{name}步骤**：" + "；".join(f"{s['expression']} = {P._fmt(s['exact_value'])} {s['unit']}"
-                                                         for s in steps[:6]))
+                step_text = f"\n**{name}步骤**：" + "；".join(f"{s['expression']} = {P._fmt(s['exact_value'])} {s['unit']}"
+                                                         for s in steps[:6])
+                lines.append(step_text)
+                blocks["steps"].append(step_text)
         text = stale + "\n".join(lines)
-        model_text, issues, _ = model_explanation(run, t.conv.get("model_mode", "auto"))
-        if model_text and not check_model_text(model_text, run):
-            text += f"\n\n补充说明：{model_text}"
-        self._say(t, text, kind="explain", card={"type": "explain", "run_id": run["run_id"]})
+        # “为什么”沿用该次计算已生成的方案分析（同一运行、同一快照），不按当前参数重写。
+        analyses = self.ws.list_analyses(run["run_id"])
+        if analyses:
+            latest = analyses[-1]
+            blocks["supplemental"] = (f"该次计算的方案分析（第 {latest['version']} 版，{latest['blocks']['origin']}）：\n\n"
+                                      + latest["blocks"]["main"])
+            text += "\n\n" + blocks["supplemental"]
+        self._say(t, text, kind="explain", card={"type": "explain", "run_id": run["run_id"], "blocks": blocks})
 
     # ================================================================ 资料
     def _query(self, t: _Turn, qtext: str, msg_id: str):
@@ -686,13 +838,19 @@ class Assistant:
         hits = (rt.get("pinned") or []) + (rt.get("candidates") or [])
         if n == 0 and not hits:
             t.conv["pending_query"] = qtext
-            self._say(t, f"可以帮你查找“{qtext}”相关要求。资料库里还没有资料，请先上传 PDF、TXT 或 MD 资料。"
+            self._say(t, f"可以帮你查找“{qtext}”相关要求。资料库里还没有资料，请先上传 PDF、Word、Excel、PPT、文本或代码等格式的资料。"
                          "已保留这个问题，上传后可以继续检索。", kind="query",
                       actions=[{"label": "上传资料", "action": "open_documents"}])
             return
         if not hits:
             self._say(t, f"在 {n} 份资料中没有找到可靠匹配。这不表示不存在相关要求，需人工核实；可以换个关键词再试。",
                       kind="query", card={"type": "query", "run_id": run["run_id"]})
+            return
+        # 理解层：模型可用时基于检索片段生成回答，否则只展示片段
+        answer = documents.answer_document_query(qtext, hits, t.conv.get("model_mode", "auto"))
+        if answer:
+            self._say(t, answer, kind="query", card={"type": "query", "run_id": run["run_id"]},
+                      note="以上为模型基于检索片段的回答（资料未经审核，仅供查阅）；下方为命中片段原文。")
             return
         self._say(t, f"在 {n} 份资料中找到 {len(hits)} 条可能相关的片段。资料未经审核（来源、版本是否现行、是否适用均待核实），"
                      "仅供查阅，尚未对方案作判定：", kind="query", card={"type": "query", "run_id": run["run_id"]})
@@ -736,7 +894,7 @@ class Assistant:
                              "payload": {"text": t.conv["pending_query"]}})
             self._say(t, msg, kind="info", actions=acts)
             return
-        self._say(t, f"{fname}：暂不支持这种文件。表格请用 .xlsx/.csv，资料请用 PDF/TXT。图片和 CAD 图纸不能直接识别为可计算方案。",
+        self._say(t, f"{fname}：暂不支持这种文件。表格请用 .xlsx/.csv；资料支持 PDF、Word、Excel、PPT、文本、代码及图片（.png/.jpg 等）。",
                   kind="error")
 
     def _handle_paste(self, t: _Turn, text: str):
@@ -871,7 +1029,20 @@ class Assistant:
             return conv
         if action in ("force_query", "rerun_query"):
             self._consume(t, msg_id)
-            self._query(t, payload.get("text", ""), msg_id + "-corrected")
+            if action == "rerun_query" or not self._consult(t, payload.get("text", ""), msg_id + "-corrected") \
+                    or self.ws.list_documents():
+                self._query(t, payload.get("text", ""), msg_id + "-corrected")
+            return self._commit(t)
+        if action == "regen_analysis":
+            run = self.ws.get_run(payload.get("run_id"), (t.project or {}).get("project_id"))
+            if run:
+                use_model = extraction.model_available() and t.conv.get("model_mode") != "fallback"
+                recent = [m["text"] for m in t.conv["messages"] if m["role"] == "user" and m.get("text")][-6:]
+                analysis = engine.regenerate_analysis(self.ws, run["run_id"], {"goals": t.conv.get("goals") or [],
+                                                                               "recent": recent}, use_model=use_model)
+                stale = "" if engine.is_current(t.project, run) else "参数在这次计算后已修改；本分析仍针对该次计算的方案快照。"
+                self._say_analysis(t, analysis, prefix=f"已为该次计算（运行 …{run['run_id'][-6:]}）生成第 {analysis['version']} 版分析，"
+                                                       f"之前的版本保留不变。{stale}")
             return self._commit(t)
         if action == "answer":
             self._consume(t, msg_id)

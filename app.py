@@ -27,4 +27,11 @@ load_secrets()
 
 from ui.chat import main  # noqa: E402
 
+# 读入用户保存的模型配置（%LOCALAPPDATA%\MqHelper\config.toml），环境变量优先
+try:
+    from agent import extraction  # noqa: E402
+    extraction.load_model_config()
+except Exception:  # noqa: BLE001
+    pass
+
 main()

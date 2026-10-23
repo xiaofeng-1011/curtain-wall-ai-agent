@@ -159,7 +159,7 @@ def test_t29_old_result_marked(tmp_path):
 def test_t30_model_failure_keeps_input(tmp_path, monkeypatch):
     monkeypatch.delenv("MW_FORCE_FALLBACK", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test")
-    monkeypatch.setattr(extraction, "PROVIDER", "deepseek")
+    monkeypatch.setenv("MW_PROVIDER", "deepseek")
 
     class Boom:
         def __init__(self, **kw):
@@ -181,7 +181,7 @@ def test_t30_model_failure_keeps_input(tmp_path, monkeypatch):
 def test_t30_invalid_model_json(tmp_path, monkeypatch):
     monkeypatch.delenv("MW_FORCE_FALLBACK", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test")
-    monkeypatch.setattr(extraction, "PROVIDER", "deepseek")
+    monkeypatch.setenv("MW_PROVIDER", "deepseek")
 
     class Bad:
         def __init__(self, **kw):
